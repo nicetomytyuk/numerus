@@ -214,7 +214,7 @@ const App = () => {
   const handleAddBot = () => {
     if (!roomCode) return;
 
-    const botNames = ['Samuele', 'Tommy', 'Fra', 'Mela', 'Igor', 'Andrea la Valanga', 'Diana', 'Edo', 'Kledi', 'Martino del Trentino', 'Vince'];
+    const botNames = ['Samuele', 'Barbie', 'A Cadore', 'Tommy', 'Fra', 'Mela', 'Igor', 'Andrea la Valanga', 'Diana', 'Edo', 'Kledi', 'Martino del Trentino', 'Vince', 'Urcio', 'Vale'];
     const usedNames = new Set(players.map((p) => p.name));
     const availableNames = botNames.filter((name) => !usedNames.has(name));
     if (availableNames.length === 0) return;
