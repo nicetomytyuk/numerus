@@ -1,110 +1,37 @@
 import { useEffect, useRef, useState } from 'react';
-import { Trophy, Users, Copy, LogOut, Star } from 'lucide-react';
 import './App.css';
 
-type Screen = 'home' | 'join' | 'username' | 'game';
-type Mode = 'create' | 'join';
-type Difficulty = 'easy' | 'normal' | 'hard';
+import type { Difficulty, Mode, Player, Screen, StoredRoom, Message } from './types';
+import { romanKeys, HARD_MESSAGE_LIFETIME } from './constants';
+import { convertToRoman } from './utils/roman';
+import { randomRoomCode } from './utils/random';
+import { readStoredRoom, persistRoomSnapshot, writeStoredRoom } from './utils/storage';
+import HomeScreen from './components/HomeScreen';
+import JoinScreen from './components/JoinScreen';
+import UsernameScreen from './components/UsernameScreen';
+import TopBar from './components/TopBar';
+import PlayersRow from './components/PlayersRow';
+import ChatFeed from './components/ChatFeed';
+import StatusCard from './components/StatusCard';
+import Keyboard from './components/Keyboard';
+import type { DifficultyOption } from './components/DifficultySelector';
 
-type Player = {
-  id: string;
-  name: string;
-  isMe: boolean;
-  isBot?: boolean;
-  points: number;
-};
+const difficultyOptions: DifficultyOption[] = [
+  { id: 'easy', label: 'Facile', detail: 'Mostra il numero da comporre', stars: 1 },
+  { id: 'normal', label: 'Normale', detail: 'Nessun suggerimento', stars: 2 },
+  { id: 'hard', label: 'Difficile', detail: 'I messaggi spariscono dopo pochi secondi', stars: 3 }
+];
 
-type Message = {
-  type: 'system' | 'play' | 'error';
-  text: string;
-  player?: string;
-  number?: number;
-  correctRoman?: string;
-  timestamp: number;
-};
+const createPlayer = (name: string, isMe: boolean, isBot = false): Player => ({
+  id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  name,
+  isMe,
+  isBot,
+  points: 0
+});
 
-type StoredRoom = {
-  code: string;
-  players: Player[];
-  showHints?: boolean;
-  difficulty?: Difficulty;
-};
-
-const romanKeys = ['I', 'V', 'X', 'L', 'C', 'D', 'M'] as const;
-const storageKey = 'numerus-room';
-const HARD_MESSAGE_LIFETIME = 1000; // milliseconds before chat messages vanish in hard mode
-const HARD_VANISH_DURATION = 600; // fade-out time before removal in hard mode
-
-const isDifficulty = (value: unknown): value is Difficulty =>
-  value === 'easy' || value === 'normal' || value === 'hard';
-
-const randomRoomCode = () => Math.random().toString(36).slice(2, 8).toUpperCase();
-
-const convertToRoman = (num: number): string => {
-  const values = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1];
-  const numerals = ['M', 'CM', 'D', 'CD', 'C', 'XC', 'L', 'XL', 'X', 'IX', 'V', 'IV', 'I'];
-  let result = '';
-
-  for (let i = 0; i < values.length; i += 1) {
-    while (num >= values[i]) {
-      result += numerals[i];
-      num -= values[i];
-    }
-  }
-  return result;
-};
-
-const readStoredRoom = (): StoredRoom | null => {
-  if (typeof localStorage === 'undefined') return null;
-  const raw = localStorage.getItem(storageKey);
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed?.code) return null;
-
-    const loadedPlayers: Player[] = Array.isArray(parsed.players)
-      ? parsed.players.map((p: Player, idx: number) => ({
-        id: typeof p.id === 'string' ? p.id : `p-${idx}`,
-        name: typeof p.name === 'string' ? p.name : `Giocatore ${idx + 1}`,
-        points: typeof p.points === 'number' ? p.points : 0,
-        isMe: false,
-        isBot: Boolean(p.isBot)
-      }))
-      : [];
-
-    const difficulty = isDifficulty(parsed.difficulty) ? parsed.difficulty : undefined;
-
-    return {
-      code: String(parsed.code),
-      players: loadedPlayers,
-      showHints: Boolean(parsed.showHints),
-      difficulty
-    };
-  } catch {
-    return null;
-  }
-};
-
-const writeStoredRoom = (room: StoredRoom | null) => {
-  if (typeof localStorage === 'undefined') return;
-  if (!room) {
-    localStorage.removeItem(storageKey);
-    return;
-  }
-
-  const payload: StoredRoom = {
-    code: room.code,
-    players: room.players.map((p) => ({
-      ...p,
-      isMe: false
-    })),
-    showHints: room.showHints,
-    difficulty: room.difficulty
-  };
-
-  localStorage.setItem(storageKey, JSON.stringify(payload));
-};
+const nextIndex = (current: number, list: Player[]) =>
+  list.length === 0 ? 0 : (current + 1) % list.length;
 
 const App = () => {
   const storedRoomData = readStoredRoom();
@@ -132,22 +59,33 @@ const App = () => {
   const [difficulty, setDifficulty] = useState<Difficulty>(() => initialDifficulty);
   const [showHints, setShowHints] = useState<boolean>(() => initialHints);
   const [now, setNow] = useState(() => Date.now());
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const persistRoom = (code: string, playerList: Player[], level: Difficulty) => {
-    if (!code) return;
-    const snapshot: StoredRoom = {
-      code,
-      players: playerList,
-      showHints: level === 'easy',
-      difficulty: level
+  useEffect(() => {
+    if (difficulty !== 'hard') return;
+
+    const purgeExpired = () => {
+      const cutoff = Date.now() - HARD_MESSAGE_LIFETIME;
+      setMessages((prev) => prev.filter((msg) => msg.timestamp >= cutoff));
     };
-    writeStoredRoom(snapshot);
-    setStoredRoom(snapshot);
+
+    purgeExpired();
+    const interval = window.setInterval(purgeExpired, 750);
+    return () => window.clearInterval(interval);
+  }, [difficulty]);
+
+  useEffect(() => {
+    if (difficulty !== 'hard' || messages.length === 0) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 150);
+    return () => window.clearInterval(interval);
+  }, [difficulty, messages.length]);
+
+  const persistRoom = (code: string, playerList: Player[], level: Difficulty) => {
+    persistRoomSnapshot(code, playerList, level, setStoredRoom);
   };
 
   const resetGameState = () => {
@@ -202,14 +140,6 @@ const App = () => {
     }
   };
 
-  const createPlayer = (name: string, isMe: boolean, isBot = false): Player => ({
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    name,
-    isMe,
-    isBot,
-    points: 0
-  });
-
   const handleSetUsername = () => {
     const trimmed = usernameInput.trim();
     if (!trimmed) return;
@@ -257,8 +187,6 @@ const App = () => {
       { type: 'system', text: `${botName} si unisce come bot.`, timestamp: Date.now() }
     ]);
   };
-
-  const nextIndex = (current: number, list: Player[]) => (list.length === 0 ? 0 : (current + 1) % list.length);
 
   const handleRomanInput = (letter: (typeof romanKeys)[number]) => {
     if (gameOver || players.length === 0) return;
@@ -337,25 +265,6 @@ const App = () => {
     return () => window.clearTimeout(timer);
   }, [players, currentPlayerIndex, currentNumber, currentRoman, gameOver, roomCode, difficulty]);
 
-  useEffect(() => {
-    if (difficulty !== 'hard') return;
-
-    const purgeExpired = () => {
-      const cutoff = Date.now() - HARD_MESSAGE_LIFETIME;
-      setMessages((prev) => prev.filter((msg) => msg.timestamp >= cutoff));
-    };
-
-    purgeExpired();
-    const interval = window.setInterval(purgeExpired, 750);
-    return () => window.clearInterval(interval);
-  }, [difficulty]);
-
-  useEffect(() => {
-    if (difficulty !== 'hard' || messages.length === 0) return;
-    const interval = window.setInterval(() => setNow(Date.now()), 150);
-    return () => window.clearInterval(interval);
-  }, [difficulty, messages.length]);
-
   const handleRestart = () => {
     if (players.length === 0) return;
     const startIndex = Math.floor(Math.random() * players.length);
@@ -407,222 +316,76 @@ const App = () => {
 
   const activePlayer = players[currentPlayerIndex];
   const myPoints = players.find((p) => p.isMe)?.points ?? 0;
-  const difficultyOptions: { id: Difficulty; label: string; detail: string; stars: number; }[] = [
-    { id: 'easy', label: 'Facile', detail: 'Mostra il numero da comporre', stars: 1 },
-    { id: 'normal', label: 'Normale', detail: 'Nessun suggerimento', stars: 2 },
-    { id: 'hard', label: 'Difficile', detail: 'I messaggi spariscono dopo pochi secondi', stars: 3 }
-  ];
 
-  // Home
   if (screen === 'home') {
-    return (
-      <div className="app-shell home-screen">
-        <div className="home-content">
-          <p className="eyebrow">Gioco a turni con numeri romani</p>
-          <h1>Stanghetta</h1>
-          <p className="lede">
-            Crea una stanza, condividi il codice, alterna i turni con la tastiera romana e non sbagliare la sequenza.
-          </p>
-          <div className="cta-row">
-            <button className="primary-btn" onClick={handleCreateGame}>
-              Gioca
-            </button>
-            <button className="ghost-btn" onClick={handleJoinGame}>
-              Entra in una partita
-            </button>
-          </div>
-          {storedRoom?.code && <p className="hint">Ultima stanza disponibile: {storedRoom.code}</p>}
-        </div>
-      </div>
-    );
+    return <HomeScreen storedRoom={storedRoom} onCreate={handleCreateGame} onJoin={handleJoinGame} />;
   }
 
-  // Join by code
   if (screen === 'join') {
     return (
-      <div className="app-shell centered-screen">
-        <div className="panel">
-          <p className="eyebrow">Entra con codice</p>
-          <h2>Inserisci il codice stanza</h2>
-          <input
-            className="code-input"
-            value={pendingCode}
-            onChange={(e) => {
-              setPendingCode(e.target.value.toUpperCase());
-              setJoinError('');
-            }}
-            placeholder="ABC123"
-            maxLength={6}
-          />
-          {joinError && <div className="error-text">{joinError}</div>}
-          <div className="action-row">
-            <button className="primary-btn" disabled={pendingCode.trim().length !== 6} onClick={handleJoinWithCode}>
-              Entra
-            </button>
-            <button className="ghost-btn" onClick={() => setScreen('home')}>
-              Indietro
-            </button>
-          </div>
-        </div>
-      </div>
+      <JoinScreen
+        pendingCode={pendingCode}
+        joinError={joinError}
+        onPendingChange={(value) => {
+          setPendingCode(value);
+          setJoinError('');
+        }}
+        onSubmit={handleJoinWithCode}
+        onBack={() => setScreen('home')}
+      />
     );
   }
 
-  // Username entry
   if (screen === 'username') {
     return (
-      <div className="app-shell centered-screen">
-        <div className="panel">
-          <p className="eyebrow">{mode === 'create' ? 'Nuova stanza' : 'Unisciti'}</p>
-          <h2>Scegli un nome</h2>
-          {mode === 'join' && <div className="code-chip">{roomCode || 'Codice stanza'}</div>}
-          <input
-            className="text-input"
-            placeholder="Il tuo nickname"
-            value={usernameInput}
-            maxLength={16}
-            onChange={(e) => setUsernameInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSetUsername()}
-          />
-          <div className="difficulty-card">
-            <div className="difficulty-header">
-              <span className="eyebrow">Difficolta</span>
-              <div className="difficulty-stars">
-                {Array.from({ length: 3 }).map((_, idx) => (
-                  <Star
-                    key={`star-${idx}`}
-                    size={18}
-                    className={
-                      idx < (difficultyOptions.find((opt) => opt.id === difficulty)?.stars || 0)
-                        ? 'filled'
-                        : ''
-                    }
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="difficulty-options">
-              {difficultyOptions.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`difficulty-option ${difficulty === option.id ? 'selected' : ''}`}
-                  onClick={() => handleDifficultyChange(option.id)}
-                >
-                  <div className="option-top">
-                    <span className="option-label">{option.label}</span>
-                    <div className="option-stars">
-                      {Array.from({ length: 3 }).map((_, idx) => (
-                        <Star
-                          key={`${option.id}-star-${idx}`}
-                          size={16}
-                          className={idx < option.stars ? 'filled' : ''}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                  <div className="option-detail">{option.detail}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="action-row">
-            <button className="primary-btn" onClick={handleSetUsername} disabled={!usernameInput.trim()}>
-              Continua
-            </button>
-            <button className="ghost-btn" onClick={() => setScreen('home')}>
-              Annulla
-            </button>
-          </div>
-        </div>
-      </div>
+      <UsernameScreen
+        mode={mode}
+        roomCode={roomCode}
+        usernameInput={usernameInput}
+        difficulty={difficulty}
+        difficultyOptions={difficultyOptions}
+        onUsernameChange={setUsernameInput}
+        onSubmit={handleSetUsername}
+        onCancel={() => setScreen('home')}
+        onDifficultyChange={handleDifficultyChange}
+      />
     );
   }
 
-  // Game view
   return (
     <div className="app-shell game-shell">
-      <header className="toolbar">
-        <div className="toolbar-left">
-          <div className="toolbar-item">
-            <Trophy size={18} />
-            <span>{myPoints} pt</span>
-          </div>
-          <div className="toolbar-item">
-            <Users size={18} />
-            <span>{username || 'Tu'}</span>
-          </div>
-        </div>
-        <div className="toolbar-right">
-          <button className="pill code nav-btn" onClick={copyRoomCode}>
-            <Copy size={16} />
-            {copied ? 'Copiato' : roomCode || '---'}
-          </button>
-          <button className="pill danger nav-btn" onClick={handleExit} aria-label="Esci dalla partita">
-            <LogOut size={16} />
-          </button>
-        </div>
-      </header>
+      <TopBar
+        myPoints={myPoints}
+        username={username}
+        roomCode={roomCode}
+        copied={copied}
+        onCopy={copyRoomCode}
+        onExit={handleExit}
+      />
 
       <div className="game-body">
-        <section className="players-row">
-          <div className="players-scroll" >
-            <div className="players-list">
-              {players.map((player, idx) => (
-                <div
-                  key={player.id}
-                  className={`player-chip ${idx === currentPlayerIndex && !gameOver ? 'active' : ''} ${player.isMe ? 'me' : ''
-                    }`}
-                >
-                  <div className="player-name">{player.name}</div>
-                  <div className="player-points">{player.points} pt</div>
-                </div>
-              ))}
-            </div>
-          </div>
-          {players.length < 8 && (
-            <button className="ghost-btn small" onClick={handleAddBot}>
-              + Bot
-            </button>
-          )}
-        </section>
+        <PlayersRow
+          players={players}
+          currentPlayerIndex={currentPlayerIndex}
+          gameOver={gameOver}
+          onAddBot={handleAddBot}
+        />
 
-        <section className={`chat ${gameOver ? 'chat-danger' : ''}`}>
-          {messages.map((msg) => {
-            const isVanishing =
-              difficulty === 'hard' && now - msg.timestamp >= HARD_MESSAGE_LIFETIME - HARD_VANISH_DURATION;
-            return (
-              <div key={msg.timestamp + msg.text} className={`chat-row ${isVanishing ? 'vanishing' : ''}`}>
-                {msg.type === 'system' && <div className="chat-system">{msg.text}</div>}
-                {msg.type === 'play' && (
-                  <div className="chat-play">
-                    <span className="chat-player">{msg.player}</span>
-                    <span className="chat-letter">{msg.text}</span>
-                  </div>
-                )}
-                {msg.type === 'error' && (
-                  <div className="chat-error">
-                    <div>{msg.text}</div>
-                    <div className="chat-error-detail">
-                      Numero {msg.number}: corretto {msg.correctRoman}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          <div ref={messagesEndRef} />
-        </section>
+        <ChatFeed
+          messages={messages}
+          gameOver={gameOver}
+          difficulty={difficulty}
+          now={now}
+          endRef={messagesEndRef}
+        />
 
         <div className="bottom-panel">
           {!gameOver && showHints && (
-            <div className="status-shell">
-              <div className="status-card">
-                <div className="label">Numero da comporre</div>
-                <div className="value">{convertToRoman(currentNumber)}</div>
-                <div className="meta">Turno di {activePlayer?.name || '...'}</div>
-              </div>
-            </div>
+            <StatusCard
+              numberLabel="Numero da comporre"
+              value={convertToRoman(currentNumber)}
+              meta={`Turno di ${activePlayer?.name || '...'}`}
+            />
           )}
 
           {gameOver && (
@@ -634,20 +397,12 @@ const App = () => {
           )}
 
           {!gameOver && (
-            <div className="keyboard-shell">
-              <div className={`keyboard ${!activePlayer?.isMe ? 'disabled' : ''}`} >
-                {romanKeys.map((key) => (
-                  <button key={key} className="key-btn" onClick={() => handleRomanInput(key)}>
-                    {key}
-                  </button>
-                ))}
-              </div>
-              {!activePlayer?.isMe && (
-                <div className="keyboard-overlay">
-                  Attendi il tuo turno: {activePlayer?.name || '...'}
-                </div>
-              )}
-            </div>
+            <Keyboard
+              keys={romanKeys}
+              disabled={!activePlayer?.isMe}
+              activePlayerName={activePlayer?.name}
+              onKeyPress={(key) => handleRomanInput(key as (typeof romanKeys)[number])}
+            />
           )}
         </div>
       </div>
