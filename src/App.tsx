@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Trophy, Users, Copy, LogOut } from 'lucide-react';
+import { Trophy, Users, Copy, LogOut, Star } from 'lucide-react';
 import './App.css';
 
 type Screen = 'home' | 'join' | 'username' | 'game';
 type Mode = 'create' | 'join';
+type Difficulty = 'easy' | 'normal' | 'hard';
 
 type Player = {
   id: string;
@@ -26,10 +27,16 @@ type StoredRoom = {
   code: string;
   players: Player[];
   showHints?: boolean;
+  difficulty?: Difficulty;
 };
 
 const romanKeys = ['I', 'V', 'X', 'L', 'C', 'D', 'M'] as const;
 const storageKey = 'numerus-room';
+const HARD_MESSAGE_LIFETIME = 1200; // milliseconds before chat messages vanish in hard mode
+const HARD_VANISH_DURATION = 400; // fade-out time before removal in hard mode
+
+const isDifficulty = (value: unknown): value is Difficulty =>
+  value === 'easy' || value === 'normal' || value === 'hard';
 
 const randomRoomCode = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
@@ -66,7 +73,14 @@ const readStoredRoom = (): StoredRoom | null => {
       }))
       : [];
 
-    return { code: String(parsed.code), players: loadedPlayers, showHints: Boolean(parsed.showHints) };
+    const difficulty = isDifficulty(parsed.difficulty) ? parsed.difficulty : undefined;
+
+    return {
+      code: String(parsed.code),
+      players: loadedPlayers,
+      showHints: Boolean(parsed.showHints),
+      difficulty
+    };
   } catch {
     return null;
   }
@@ -85,13 +99,21 @@ const writeStoredRoom = (room: StoredRoom | null) => {
       ...p,
       isMe: false
     })),
-    showHints: room.showHints
+    showHints: room.showHints,
+    difficulty: room.difficulty
   };
 
   localStorage.setItem(storageKey, JSON.stringify(payload));
 };
 
 const App = () => {
+  const storedRoomData = readStoredRoom();
+  const initialDifficulty =
+    storedRoomData?.difficulty ?? (storedRoomData?.showHints ? 'easy' : 'normal');
+  const initialHints = storedRoomData?.difficulty
+    ? storedRoomData.difficulty === 'easy'
+    : (storedRoomData?.showHints ?? false);
+
   const [screen, setScreen] = useState<Screen>('home');
   const [mode, setMode] = useState<Mode>('create');
   const [roomCode, setRoomCode] = useState('');
@@ -106,22 +128,24 @@ const App = () => {
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
   const [gameOver, setGameOver] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [storedRoom, setStoredRoom] = useState<StoredRoom | null>(() => readStoredRoom());
-  const [showHints, setShowHints] = useState<boolean>(() => readStoredRoom()?.showHints ?? false);
+  const [storedRoom, setStoredRoom] = useState<StoredRoom | null>(() => storedRoomData);
+  const [difficulty, setDifficulty] = useState<Difficulty>(() => initialDifficulty);
+  const [showHints, setShowHints] = useState<boolean>(() => initialHints);
+  const [now, setNow] = useState(() => Date.now());
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  useEffect(() => {
-  }, [players, showHints, currentNumber, gameOver]);
-
-  const persistRoom = (code: string, playerList: Player[], hints: boolean) => {
+  const persistRoom = (code: string, playerList: Player[], level: Difficulty) => {
     if (!code) return;
-    const snapshot: StoredRoom = { code, players: playerList, showHints: hints };
+    const snapshot: StoredRoom = {
+      code,
+      players: playerList,
+      showHints: level === 'easy',
+      difficulty: level
+    };
     writeStoredRoom(snapshot);
     setStoredRoom(snapshot);
   };
@@ -138,6 +162,7 @@ const App = () => {
     setJoinError('');
     setCopied(false);
     setShowHints(false);
+    setDifficulty('normal');
   };
 
   const handleCreateGame = () => {
@@ -159,8 +184,10 @@ const App = () => {
 
     resetGameState();
     if (storedRoom && storedRoom.code === normalized) {
+      const storedDifficulty = storedRoom.difficulty ?? (storedRoom.showHints ? 'easy' : 'normal');
       setRoomCode(normalized);
-      setShowHints(Boolean(storedRoom.showHints));
+      setDifficulty(storedDifficulty);
+      setShowHints(storedDifficulty === 'easy');
       setPlayers(storedRoom.players.map((p) => ({ ...p, isMe: false })));
       setMessages([
         {
@@ -195,7 +222,8 @@ const App = () => {
     const updatedPlayers = [...players, newPlayer];
     setUsername(trimmed);
     setPlayers(updatedPlayers);
-    persistRoom(codeToUse, updatedPlayers, showHints);
+    setShowHints(difficulty === 'easy');
+    persistRoom(codeToUse, updatedPlayers, difficulty);
     setMessages((prev) => [
       ...prev,
       {
@@ -223,7 +251,7 @@ const App = () => {
     const newBot = createPlayer(botName, false, true);
     const updatedPlayers = [...players, newBot];
     setPlayers(updatedPlayers);
-    persistRoom(roomCode, updatedPlayers, showHints);
+    persistRoom(roomCode, updatedPlayers, difficulty);
     setMessages((prev) => [
       ...prev,
       { type: 'system', text: `${botName} si unisce come bot.`, timestamp: Date.now() }
@@ -263,7 +291,7 @@ const App = () => {
         const next = prev.map((player, idx) =>
           idx === currentPlayerIndex ? { ...player, points: player.points + 1 } : player
         );
-        persistRoom(roomCode, next, showHints);
+        persistRoom(roomCode, next, difficulty);
         return next;
       });
       setCurrentNumber((prev) => prev + 1);
@@ -294,7 +322,7 @@ const App = () => {
           const next = prev.map((player, idx) =>
             idx === currentPlayerIndex ? { ...player, points: player.points + 1 } : player
           );
-          persistRoom(roomCode, next, showHints);
+          persistRoom(roomCode, next, difficulty);
           return next;
         });
         setCurrentNumber((prev) => prev + 1);
@@ -307,7 +335,26 @@ const App = () => {
     }, 650);
 
     return () => window.clearTimeout(timer);
-  }, [players, currentPlayerIndex, currentNumber, currentRoman, gameOver, roomCode, showHints]);
+  }, [players, currentPlayerIndex, currentNumber, currentRoman, gameOver, roomCode, difficulty]);
+
+  useEffect(() => {
+    if (difficulty !== 'hard') return;
+
+    const purgeExpired = () => {
+      const cutoff = Date.now() - HARD_MESSAGE_LIFETIME;
+      setMessages((prev) => prev.filter((msg) => msg.timestamp >= cutoff));
+    };
+
+    purgeExpired();
+    const interval = window.setInterval(purgeExpired, 750);
+    return () => window.clearInterval(interval);
+  }, [difficulty]);
+
+  useEffect(() => {
+    if (difficulty !== 'hard' || messages.length === 0) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 150);
+    return () => window.clearInterval(interval);
+  }, [difficulty, messages.length]);
 
   const handleRestart = () => {
     if (players.length === 0) return;
@@ -323,7 +370,7 @@ const App = () => {
     ]);
     setPlayers((prev) => {
       const next = prev.map((player) => ({ ...player, points: 0 }));
-      persistRoom(roomCode, next, showHints);
+      persistRoom(roomCode, next, difficulty);
       return next;
     });
     setCurrentNumber(1);
@@ -350,8 +397,21 @@ const App = () => {
     setScreen('home');
   };
 
+  const handleDifficultyChange = (value: Difficulty) => {
+    setDifficulty(value);
+    setShowHints(value === 'easy');
+    if (roomCode) {
+      persistRoom(roomCode, players, value);
+    }
+  };
+
   const activePlayer = players[currentPlayerIndex];
   const myPoints = players.find((p) => p.isMe)?.points ?? 0;
+  const difficultyOptions: { id: Difficulty; label: string; detail: string; stars: number; }[] = [
+    { id: 'easy', label: 'Facile', detail: 'Mostra il numero da comporre', stars: 1 },
+    { id: 'normal', label: 'Normale', detail: 'Nessun suggerimento', stars: 2 },
+    { id: 'hard', label: 'Difficile', detail: 'I messaggi spariscono dopo pochi secondi', stars: 3 }
+  ];
 
   // Home
   if (screen === 'home') {
@@ -424,26 +484,48 @@ const App = () => {
             onChange={(e) => setUsernameInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSetUsername()}
           />
-          {mode === 'create' && (
-            <label className="toggle-row">
-              <span>Mostra suggerimenti</span>
-              <div className="toggle">
-                <input
-                  type="checkbox"
-                  checked={showHints}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setShowHints(checked);
-                    if (roomCode) {
-                      persistRoom(roomCode, players, checked);
+          <div className="difficulty-card">
+            <div className="difficulty-header">
+              <span className="eyebrow">Difficolta</span>
+              <div className="difficulty-stars">
+                {Array.from({ length: 3 }).map((_, idx) => (
+                  <Star
+                    key={`star-${idx}`}
+                    size={18}
+                    className={
+                      idx < (difficultyOptions.find((opt) => opt.id === difficulty)?.stars || 0)
+                        ? 'filled'
+                        : ''
                     }
-                  }}
-                  aria-label="Mostra numero target"
-                />
-                <span className="slider" />
+                  />
+                ))}
               </div>
-            </label>
-          )}
+            </div>
+            <div className="difficulty-options">
+              {difficultyOptions.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`difficulty-option ${difficulty === option.id ? 'selected' : ''}`}
+                  onClick={() => handleDifficultyChange(option.id)}
+                >
+                  <div className="option-top">
+                    <span className="option-label">{option.label}</span>
+                    <div className="option-stars">
+                      {Array.from({ length: 3 }).map((_, idx) => (
+                        <Star
+                          key={`${option.id}-star-${idx}`}
+                          size={16}
+                          className={idx < option.stars ? 'filled' : ''}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="option-detail">{option.detail}</div>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="action-row">
             <button className="primary-btn" onClick={handleSetUsername} disabled={!usernameInput.trim()}>
               Continua
@@ -506,25 +588,29 @@ const App = () => {
         </section>
 
         <section className={`chat ${gameOver ? 'chat-danger' : ''}`}>
-          {messages.map((msg) => (
-            <div key={msg.timestamp + msg.text} className="chat-row">
-              {msg.type === 'system' && <div className="chat-system">{msg.text}</div>}
-              {msg.type === 'play' && (
-                <div className="chat-play">
-                  <span className="chat-player">{msg.player}</span>
-                  <span className="chat-letter">{msg.text}</span>
-                </div>
-              )}
-              {msg.type === 'error' && (
-                <div className="chat-error">
-                  <div>{msg.text}</div>
-                  <div className="chat-error-detail">
-                    Numero {msg.number}: corretto {msg.correctRoman}
+          {messages.map((msg) => {
+            const isVanishing =
+              difficulty === 'hard' && now - msg.timestamp >= HARD_MESSAGE_LIFETIME - HARD_VANISH_DURATION;
+            return (
+              <div key={msg.timestamp + msg.text} className={`chat-row ${isVanishing ? 'vanishing' : ''}`}>
+                {msg.type === 'system' && <div className="chat-system">{msg.text}</div>}
+                {msg.type === 'play' && (
+                  <div className="chat-play">
+                    <span className="chat-player">{msg.player}</span>
+                    <span className="chat-letter">{msg.text}</span>
                   </div>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+                {msg.type === 'error' && (
+                  <div className="chat-error">
+                    <div>{msg.text}</div>
+                    <div className="chat-error-detail">
+                      Numero {msg.number}: corretto {msg.correctRoman}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
           <div ref={messagesEndRef} />
         </section>
 
@@ -570,6 +656,3 @@ const App = () => {
 };
 
 export default App;
-
-
-
