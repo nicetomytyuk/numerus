@@ -7,9 +7,10 @@ type Props = {
   copied: boolean;
   onCopy: () => void;
   onExit: () => void;
+  showRoomCode: boolean;
 };
 
-const TopBar = ({ myPoints, username, roomCode, copied, onCopy, onExit }: Props) => (
+const TopBar = ({ myPoints, username, roomCode, copied, onCopy, onExit, showRoomCode }: Props) => (
   <header className="toolbar">
     <div className="toolbar-left">
       <div className="toolbar-item">
@@ -22,10 +23,12 @@ const TopBar = ({ myPoints, username, roomCode, copied, onCopy, onExit }: Props)
       </div>
     </div>
     <div className="toolbar-right">
-      <button className="pill code nav-btn" onClick={onCopy}>
-        <Copy size={16} />
-        {copied ? 'Copiato' : roomCode || '---'}
-      </button>
+      {showRoomCode && (
+        <button className="pill code nav-btn" onClick={onCopy}>
+          <Copy size={16} />
+          {copied ? 'Copiato' : roomCode || '---'}
+        </button>
+      )}
       <button className="pill danger nav-btn" onClick={onExit} aria-label="Esci dalla partita">
         <LogOut size={16} />
       </button>

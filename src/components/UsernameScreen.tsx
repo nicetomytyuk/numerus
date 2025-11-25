@@ -11,6 +11,8 @@ type Props = {
   onSubmit: () => void;
   onCancel: () => void;
   onDifficultyChange: (value: Difficulty) => void;
+  error?: string;
+  loading?: boolean;
 };
 
 const UsernameScreen = ({
@@ -22,7 +24,9 @@ const UsernameScreen = ({
   onUsernameChange,
   onSubmit,
   onCancel,
-  onDifficultyChange
+  onDifficultyChange,
+  error,
+  loading
 }: Props) => (
   <div className="app-shell centered-screen">
     <div className="panel">
@@ -37,14 +41,15 @@ const UsernameScreen = ({
         onChange={(e) => onUsernameChange(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
       />
+      {error && <div className="error-text">{error}</div>}
       <DifficultySelector
         difficulty={difficulty}
         options={difficultyOptions}
         onChange={onDifficultyChange}
       />
       <div className="action-row">
-        <button className="primary-btn" onClick={onSubmit} disabled={!usernameInput.trim()}>
-          Continua
+        <button className="primary-btn" onClick={onSubmit} disabled={!usernameInput.trim() || loading}>
+          {loading ? 'Connessione...' : 'Continua'}
         </button>
         <button className="ghost-btn" onClick={onCancel}>
           Annulla

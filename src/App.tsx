@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import './App.css';
 
-import type { Difficulty, Mode, Player, Screen, StoredRoom, Message } from './types';
+import type { Difficulty, Mode, Player, Screen, StoredRoom, Message, GameMode } from './types';
 import { romanKeys, HARD_MESSAGE_LIFETIME } from './constants';
 import { convertToRoman } from './utils/roman';
 import { randomRoomCode } from './utils/random';
 import { readStoredRoom, persistRoomSnapshot, writeStoredRoom } from './utils/storage';
+import { createRoom, getRoomByCode, updateRoomState } from './supabase/repositories/rooms';
+import { addPlayer, listPlayers, updatePlayerPoints, removePlayer } from './supabase/repositories/players';
+import { addMessage as addRemoteMessage, listMessages } from './supabase/repositories/messages';
+import { subscribeToPlayers, subscribeToMessages, subscribeToRoom } from './supabase/subscriptions';
+import type { PlayerRow, MessageRow, RoomRow } from './supabase/types';
+import { supabase } from './supabase/client';
 import HomeScreen from './components/HomeScreen';
 import JoinScreen from './components/JoinScreen';
 import UsernameScreen from './components/UsernameScreen';
@@ -33,6 +39,25 @@ const createPlayer = (name: string, isMe: boolean, isBot = false): Player => ({
 const nextIndex = (current: number, list: Player[]) =>
   list.length === 0 ? 0 : (current + 1) % list.length;
 
+const mapPlayerRow = (row: PlayerRow, myId: string | null): Player => ({
+  id: row.id,
+  name: row.name,
+  isMe: row.id === myId,
+  isBot: row.is_bot,
+  points: row.points,
+  turnOrder: row.turn_order
+});
+
+const mapMessageRow = (row: MessageRow): Message => ({
+  type: row.type,
+  text: row.text,
+  player: undefined,
+  playerId: row.player_id ?? undefined,
+  number: row.number ?? undefined,
+  correctRoman: row.correct_roman ?? undefined,
+  timestamp: new Date(row.created_at).getTime()
+});
+
 const App = () => {
   const storedRoomData = readStoredRoom();
   const initialDifficulty =
@@ -43,7 +68,10 @@ const App = () => {
 
   const [screen, setScreen] = useState<Screen>('home');
   const [mode, setMode] = useState<Mode>('create');
+  const [gameMode, setGameMode] = useState<GameMode>('offline');
   const [roomCode, setRoomCode] = useState('');
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
   const [pendingCode, setPendingCode] = useState('');
   const [joinError, setJoinError] = useState('');
   const [usernameInput, setUsernameInput] = useState('');
@@ -59,7 +87,12 @@ const App = () => {
   const [difficulty, setDifficulty] = useState<Difficulty>(() => initialDifficulty);
   const [showHints, setShowHints] = useState<boolean>(() => initialHints);
   const [now, setNow] = useState(() => Date.now());
+  const [onlineLoading, setOnlineLoading] = useState(false);
+  const [onlineError, setOnlineError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const playerChannelRef = useRef<ReturnType<typeof subscribeToPlayers> | null>(null);
+  const messageChannelRef = useRef<ReturnType<typeof subscribeToMessages> | null>(null);
+  const roomChannelRef = useRef<ReturnType<typeof subscribeToRoom> | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -89,6 +122,12 @@ const App = () => {
   };
 
   const resetGameState = () => {
+    playerChannelRef.current?.unsubscribe?.();
+    messageChannelRef.current?.unsubscribe?.();
+    roomChannelRef.current?.unsubscribe?.();
+    playerChannelRef.current = null;
+    messageChannelRef.current = null;
+    roomChannelRef.current = null;
     setPlayers([]);
     setMessages([]);
     setCurrentNumber(1);
@@ -101,17 +140,31 @@ const App = () => {
     setCopied(false);
     setShowHints(false);
     setDifficulty('normal');
+    setRoomId(null);
+    setMyPlayerId(null);
+    setGameMode('offline');
+    setOnlineLoading(false);
+    setOnlineError('');
   };
 
   const handleCreateGame = () => {
     resetGameState();
     setMode('create');
+    setGameMode('offline');
     setScreen('username');
   };
 
-  const handleJoinGame = () => {
+  const handleCreateOnlineGame = () => {
+    resetGameState();
+    setMode('create');
+    setGameMode('online');
+    setScreen('username');
+  };
+
+  const handleJoinOnlineGame = () => {
     resetGameState();
     setMode('join');
+    setGameMode('online');
     setScreen('join');
     setPendingCode('');
   };
@@ -120,29 +173,150 @@ const App = () => {
     const normalized = pendingCode.trim().toUpperCase();
     if (normalized.length !== 6) return;
 
+    const targetMode = gameMode;
     resetGameState();
-    if (storedRoom && storedRoom.code === normalized) {
-      const storedDifficulty = storedRoom.difficulty ?? (storedRoom.showHints ? 'easy' : 'normal');
-      setRoomCode(normalized);
-      setDifficulty(storedDifficulty);
-      setShowHints(storedDifficulty === 'easy');
-      setPlayers(storedRoom.players.map((p) => ({ ...p, isMe: false })));
-      setMessages([
-        {
-          type: 'system',
-          text: `Codice ${normalized} trovato. Inserisci il tuo nome per entrare.`,
-          timestamp: Date.now()
-        }
-      ]);
-      setScreen('username');
+    setGameMode(targetMode);
+
+    if (targetMode === 'offline') {
+      if (storedRoom && storedRoom.code === normalized) {
+        const storedDifficulty = storedRoom.difficulty ?? (storedRoom.showHints ? 'easy' : 'normal');
+        setRoomCode(normalized);
+        setDifficulty(storedDifficulty);
+        setShowHints(storedDifficulty === 'easy');
+        setPlayers(storedRoom.players.map((p) => ({ ...p, isMe: false })));
+        setMessages([
+          {
+            type: 'system',
+            text: `Codice ${normalized} trovato. Inserisci il tuo nome per entrare.`,
+            timestamp: Date.now()
+          }
+        ]);
+        setScreen('username');
+      } else {
+        setJoinError('Nessuna stanza trovata con questo codice.');
+      }
     } else {
-      setJoinError('Nessuna stanza trovata con questo codice.');
+      setRoomCode(normalized);
+      setMode('join');
+      setScreen('username');
+    }
+  };
+
+  const hydrateFromRoom = async (room: RoomRow, myId: string) => {
+    const [remotePlayers, remoteMessages] = await Promise.all([
+      listPlayers(room.id),
+      listMessages(room.id)
+    ]);
+    setRoomId(room.id);
+    setRoomCode(room.code);
+    setDifficulty(room.difficulty);
+    setShowHints(room.show_hints);
+    setCurrentNumber(room.current_number);
+    setCurrentPlayerIndex(room.current_player_index);
+    setGameOver(room.status === 'finished');
+    const sortedPlayers = remotePlayers
+      .map((p) => mapPlayerRow(p, myId))
+      .sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+    setPlayers(sortedPlayers);
+    setMessages(remoteMessages.map(mapMessageRow));
+  };
+
+  const attachRealtime = (room: RoomRow, myId: string) => {
+    playerChannelRef.current?.unsubscribe?.();
+    messageChannelRef.current?.unsubscribe?.();
+    roomChannelRef.current?.unsubscribe?.();
+
+    playerChannelRef.current = subscribeToPlayers(room.id, ({ type, record }) => {
+      setPlayers((prev) => {
+        const mapped = mapPlayerRow(record, myId);
+        if (type === 'DELETE') {
+          return prev.filter((p) => p.id !== record.id);
+        }
+        const exists = prev.find((p) => p.id === record.id);
+        if (exists) {
+          return prev
+            .map((p) => (p.id === record.id ? { ...mapped } : p))
+            .sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+        }
+        return [...prev, mapped].sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+      });
+    });
+
+    messageChannelRef.current = subscribeToMessages(room.id, ({ record }) => {
+      setMessages((prev) => [...prev, mapMessageRow(record)]);
+    });
+
+    roomChannelRef.current = subscribeToRoom(room.id, ({ record }) => {
+      setCurrentNumber(record.current_number);
+      setCurrentPlayerIndex(record.current_player_index);
+      setGameOver(record.status === 'finished');
+      setDifficulty(record.difficulty);
+      setShowHints(record.show_hints);
+    });
+  };
+
+  const startOnlineSession = async (playerName: string) => {
+    if (!supabase) {
+      setOnlineError('Configurare Supabase per giocare online.');
+      return;
+    }
+    setOnlineLoading(true);
+    setOnlineError('');
+    try {
+      if (mode === 'create') {
+        const codeToUse = roomCode || randomRoomCode();
+        const newRoom = await createRoom({ code: codeToUse, difficulty, showHints: difficulty === 'easy' });
+        if (!newRoom) throw new Error('Impossibile creare la stanza online.');
+        const myRemote = await addPlayer({
+          roomId: newRoom.id,
+          name: playerName,
+          turnOrder: 0,
+          isOwner: true
+        });
+        if (!myRemote) throw new Error('Impossibile creare il giocatore.');
+        setMyPlayerId(myRemote.id);
+        setUsername(playerName);
+        await hydrateFromRoom(newRoom, myRemote.id);
+        attachRealtime(newRoom, myRemote.id);
+        setMode('create');
+        setGameMode('online');
+        setScreen('game');
+      } else {
+        const codeToUse = roomCode || pendingCode;
+        if (!codeToUse) throw new Error('Codice stanza mancante.');
+        const existingRoom = await getRoomByCode(codeToUse);
+        if (!existingRoom) throw new Error('Stanza non trovata.');
+        const currentPlayers = await listPlayers(existingRoom.id);
+        const myRemote = await addPlayer({
+          roomId: existingRoom.id,
+          name: playerName,
+          turnOrder: currentPlayers.length
+        });
+        if (!myRemote) throw new Error('Impossibile unirsi alla stanza.');
+        setMyPlayerId(myRemote.id);
+        setUsername(playerName);
+        await hydrateFromRoom(existingRoom, myRemote.id);
+        attachRealtime(existingRoom, myRemote.id);
+        setMode('join');
+        setGameMode('online');
+        setScreen('game');
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Errore online inatteso.';
+      setOnlineError(message);
+    } finally {
+      setOnlineLoading(false);
     }
   };
 
   const handleSetUsername = () => {
     const trimmed = usernameInput.trim();
     if (!trimmed) return;
+
+    if (gameMode === 'online') {
+      void startOnlineSession(trimmed);
+      return;
+    }
 
     const codeToUse = roomCode || randomRoomCode();
     if (!roomCode) {
@@ -170,7 +344,7 @@ const App = () => {
   };
 
   const handleAddBot = () => {
-    if (!roomCode) return;
+    if (!roomCode || gameMode === 'online') return;
 
     const botNames = ['Samuele', 'Barbie', 'A Cadore', 'Tommy', 'Fra', 'Mela', 'Igor', 'Andrea la Valanga', 'Diana', 'Edo', 'Kledi', 'Martino del Trentino', 'Vince', 'Urcio', 'Vale'];
     const usedNames = new Set(players.map((p) => p.name));
@@ -188,7 +362,7 @@ const App = () => {
     ]);
   };
 
-  const handleRomanInput = (letter: (typeof romanKeys)[number]) => {
+  const handleRomanInput = async (letter: (typeof romanKeys)[number]) => {
     if (gameOver || players.length === 0) return;
 
     const currentPlayer = players[currentPlayerIndex];
@@ -198,32 +372,60 @@ const App = () => {
     const candidate = currentRoman + letter;
 
     if (!targetRoman.startsWith(candidate)) {
+      const newMessage: Message = {
+        type: 'error',
+        text: `${currentPlayer.name} ha perso: combinazione non valida.`,
+        number: currentNumber,
+        correctRoman: targetRoman,
+        timestamp: Date.now()
+      };
       setGameOver(true);
-      setMessages((prev) => [
-        ...prev,
-        {
+      setMessages((prev) => [...prev, newMessage]);
+      if (gameMode === 'online' && roomId) {
+        await addRemoteMessage({
+          roomId,
+          playerId: myPlayerId,
           type: 'error',
-          text: `${currentPlayer.name} ha perso: combinazione non valida.`,
+          text: newMessage.text,
           number: currentNumber,
-          correctRoman: targetRoman,
-          timestamp: Date.now()
-        }
-      ]);
+          correctRoman: targetRoman
+        });
+        await updateRoomState(roomId, { status: 'finished' });
+      }
       return;
     }
 
-    setMessages((prev) => [...prev, { type: 'play', player: currentPlayer.name, text: letter, timestamp: Date.now() }]);
+    if (gameMode === 'online' && roomId) {
+      await addRemoteMessage({
+        roomId,
+        playerId: myPlayerId,
+        type: 'play',
+        text: letter
+      });
+    } else {
+      setMessages((prev) => [...prev, { type: 'play', player: currentPlayer.name, text: letter, timestamp: Date.now() }]);
+    }
 
     if (candidate === targetRoman) {
       setPlayers((prev) => {
         const next = prev.map((player, idx) =>
           idx === currentPlayerIndex ? { ...player, points: player.points + 1 } : player
         );
-        persistRoom(roomCode, next, difficulty);
+        if (gameMode === 'offline') {
+          persistRoom(roomCode, next, difficulty);
+        } else if (gameMode === 'online' && currentPlayer.id) {
+          void updatePlayerPoints(currentPlayer.id, currentPlayer.points + 1);
+        }
         return next;
       });
       setCurrentNumber((prev) => prev + 1);
       setCurrentRoman('');
+      if (gameMode === 'online' && roomId) {
+        await updateRoomState(roomId, {
+          current_number: currentNumber + 1,
+          current_player_index: nextIndex(currentPlayerIndex, players)
+        });
+      }
     } else {
       setCurrentRoman(candidate);
     }
@@ -232,7 +434,7 @@ const App = () => {
   };
 
   useEffect(() => {
-    if (players.length === 0) return;
+    if (players.length === 0 || gameMode === 'online') return;
     const currentPlayer = players[currentPlayerIndex];
     if (gameOver || !currentPlayer?.isBot) return;
 
@@ -263,7 +465,7 @@ const App = () => {
     }, 650);
 
     return () => window.clearTimeout(timer);
-  }, [players, currentPlayerIndex, currentNumber, currentRoman, gameOver, roomCode, difficulty]);
+  }, [players, currentPlayerIndex, currentNumber, currentRoman, gameOver, roomCode, difficulty, gameMode]);
 
   const handleRestart = () => {
     if (players.length === 0) return;
@@ -279,7 +481,20 @@ const App = () => {
     ]);
     setPlayers((prev) => {
       const next = prev.map((player) => ({ ...player, points: 0 }));
-      persistRoom(roomCode, next, difficulty);
+      if (gameMode === 'offline') {
+        persistRoom(roomCode, next, difficulty);
+      } else {
+        next.forEach((player) => {
+          void updatePlayerPoints(player.id, 0);
+        });
+        if (roomId) {
+          void updateRoomState(roomId, {
+            current_number: 1,
+            current_player_index: startIndex,
+            status: 'active'
+          });
+        }
+      }
       return next;
     });
     setCurrentNumber(1);
@@ -299,6 +514,9 @@ const App = () => {
   };
 
   const handleExit = () => {
+    if (gameMode === 'online' && myPlayerId) {
+      void removePlayer(myPlayerId);
+    }
     resetGameState();
     setRoomCode('');
     writeStoredRoom(null);
@@ -318,7 +536,15 @@ const App = () => {
   const myPoints = players.find((p) => p.isMe)?.points ?? 0;
 
   if (screen === 'home') {
-    return <HomeScreen storedRoom={storedRoom} onCreate={handleCreateGame} onJoin={handleJoinGame} />;
+    return (
+      <HomeScreen
+        storedRoom={storedRoom}
+        onCreateOnline={handleCreateOnlineGame}
+        onJoinOnline={handleJoinOnlineGame}
+        onCreateOffline={handleCreateGame}
+        onlineEnabled={Boolean(supabase)}
+      />
+    );
   }
 
   if (screen === 'join') {
@@ -348,6 +574,8 @@ const App = () => {
         onSubmit={handleSetUsername}
         onCancel={() => setScreen('home')}
         onDifficultyChange={handleDifficultyChange}
+        error={onlineError}
+        loading={onlineLoading}
       />
     );
   }
@@ -361,6 +589,7 @@ const App = () => {
         copied={copied}
         onCopy={copyRoomCode}
         onExit={handleExit}
+        showRoomCode={gameMode === 'online'}
       />
 
       <div className="game-body">
@@ -376,6 +605,7 @@ const App = () => {
           gameOver={gameOver}
           difficulty={difficulty}
           now={now}
+          players={players}
           endRef={messagesEndRef}
         />
 

@@ -67,6 +67,35 @@
 .home-content {
   max-width: 780px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  min-height: 70vh;
+  width: min(900px, 100%);
+  position: relative;
+}
+
+.home-center {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding-bottom: 24px;
+}
+
+.home-bottom {
+  width: 100%;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 12px;
 }
 
 .centered-screen {
@@ -149,6 +178,30 @@
 .ghost-btn.small {
   padding: 10px 14px;
   font-weight: 600;
+}
+
+.ghost-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 8px 12px;
+}
+
+.link-btn:hover {
+  color: var(--accent-strong);
+}
+
+.offline-link {
+  margin-top: auto;
 }
 
 .primary-btn:hover,

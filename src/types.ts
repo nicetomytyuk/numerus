@@ -1,5 +1,6 @@
 export type Screen = 'home' | 'join' | 'username' | 'game';
 export type Mode = 'create' | 'join';
+export type GameMode = 'offline' | 'online';
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
 export type Player = {
@@ -8,12 +9,14 @@ export type Player = {
   isMe: boolean;
   isBot?: boolean;
   points: number;
+  turnOrder?: number;
 };
 
 export type Message = {
   type: 'system' | 'play' | 'error';
   text: string;
   player?: string;
+  playerId?: string;
   number?: number;
   correctRoman?: string;
   timestamp: number;
