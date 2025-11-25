@@ -540,9 +540,11 @@ const App = () => {
           )}
 
           {gameOver && (
-            <button className="primary-btn full" onClick={handleRestart}>
-              Rigioca e scegli chi parte
-            </button>
+            <div className="gameover-shell">
+              <button className="primary-btn full" onClick={handleRestart}>
+                Rigioca e scegli chi parte
+              </button>
+            </div>
           )}
 
           {!gameOver && (

@@ -430,6 +430,10 @@
   padding: 0 16px;
 }
 
+.gameover-shell {
+  padding: 0 16px;
+}
+
 .status-card {
   width: 100%;
   margin: 0;
@@ -595,10 +599,6 @@
   .topbar {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .toolbar-right {
-    justify-content: space-between;
   }
 
   .keyboard-shell {
