@@ -32,8 +32,8 @@ type StoredRoom = {
 
 const romanKeys = ['I', 'V', 'X', 'L', 'C', 'D', 'M'] as const;
 const storageKey = 'numerus-room';
-const HARD_MESSAGE_LIFETIME = 1200; // milliseconds before chat messages vanish in hard mode
-const HARD_VANISH_DURATION = 400; // fade-out time before removal in hard mode
+const HARD_MESSAGE_LIFETIME = 1000; // milliseconds before chat messages vanish in hard mode
+const HARD_VANISH_DURATION = 600; // fade-out time before removal in hard mode
 
 const isDifficulty = (value: unknown): value is Difficulty =>
   value === 'easy' || value === 'normal' || value === 'hard';
