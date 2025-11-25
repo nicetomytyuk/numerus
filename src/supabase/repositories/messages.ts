@@ -36,3 +36,9 @@ export const listMessages = async (roomId: string): Promise<MessageRow[]> => {
   if (error) throw error;
   return data as MessageRow[];
 };
+
+export const clearMessages = async (roomId: string) => {
+  if (!supabase) return;
+  const { error } = await supabase.from('room_messages').delete().eq('room_id', roomId);
+  if (error) throw error;
+};

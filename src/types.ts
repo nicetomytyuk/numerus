@@ -13,6 +13,7 @@ export type Player = {
 };
 
 export type Message = {
+  id?: number;
   type: 'system' | 'play' | 'error';
   text: string;
   player?: string;

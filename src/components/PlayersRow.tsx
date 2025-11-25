@@ -5,9 +5,10 @@ type Props = {
   currentPlayerIndex: number;
   gameOver: boolean;
   onAddBot: () => void;
+  canAddBot: boolean;
 };
 
-const PlayersRow = ({ players, currentPlayerIndex, gameOver, onAddBot }: Props) => (
+const PlayersRow = ({ players, currentPlayerIndex, gameOver, onAddBot, canAddBot }: Props) => (
   <section className="players-row">
     <div className="players-scroll">
       <div className="players-list">
@@ -23,7 +24,7 @@ const PlayersRow = ({ players, currentPlayerIndex, gameOver, onAddBot }: Props) 
         ))}
       </div>
     </div>
-    {players.length < 8 && (
+    {canAddBot && players.length < 8 && (
       <button className="ghost-btn small" onClick={onAddBot}>
         + Bot
       </button>

@@ -20,7 +20,7 @@ const ChatFeed = ({ messages, gameOver, difficulty, now, endRef, players }: Prop
         || (msg.playerId ? players.find((p) => p.id === msg.playerId)?.name : undefined)
         || '';
       return (
-        <div key={msg.timestamp + msg.text} className={`chat-row ${isVanishing ? 'vanishing' : ''}`}>
+        <div key={(msg.id ?? msg.timestamp) + msg.text} className={`chat-row ${isVanishing ? 'vanishing' : ''}`}>
           {msg.type === 'system' && <div className="chat-system">{msg.text}</div>}
           {msg.type === 'play' && (
             <div className="chat-play">

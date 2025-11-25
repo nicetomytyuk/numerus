@@ -13,6 +13,8 @@ type Props = {
   onDifficultyChange: (value: Difficulty) => void;
   error?: string;
   loading?: boolean;
+  showDifficulty: boolean;
+  showRoomCode: boolean;
 };
 
 const UsernameScreen = ({
@@ -26,13 +28,15 @@ const UsernameScreen = ({
   onCancel,
   onDifficultyChange,
   error,
-  loading
+  loading,
+  showDifficulty,
+  showRoomCode
 }: Props) => (
   <div className="app-shell centered-screen">
     <div className="panel">
       <p className="eyebrow">{mode === 'create' ? 'Nuova stanza' : 'Unisciti'}</p>
       <h2>Scegli un nome</h2>
-      {mode === 'join' && <div className="code-chip">{roomCode || 'Codice stanza'}</div>}
+      {showRoomCode && mode === 'join' && <div className="code-chip">{roomCode || 'Codice stanza'}</div>}
       <input
         className="text-input"
         placeholder="Il tuo nickname"
@@ -42,11 +46,13 @@ const UsernameScreen = ({
         onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
       />
       {error && <div className="error-text">{error}</div>}
-      <DifficultySelector
-        difficulty={difficulty}
-        options={difficultyOptions}
-        onChange={onDifficultyChange}
-      />
+      {showDifficulty && (
+        <DifficultySelector
+          difficulty={difficulty}
+          options={difficultyOptions}
+          onChange={onDifficultyChange}
+        />
+      )}
       <div className="action-row">
         <button className="primary-btn" onClick={onSubmit} disabled={!usernameInput.trim() || loading}>
           {loading ? 'Connessione...' : 'Continua'}

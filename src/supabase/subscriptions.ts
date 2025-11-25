@@ -12,7 +12,8 @@ export const subscribeToPlayers = (
       'postgres_changes',
       { event: '*', schema: 'public', table: 'room_players', filter: `room_id=eq.${roomId}` },
       (payload) => {
-        const record = (payload.new || payload.old) as PlayerRow;
+        const record = (payload.new || payload.old) as PlayerRow | null;
+        if (!record) return;
         handler({ type: payload.eventType as 'INSERT' | 'UPDATE' | 'DELETE', record });
       }
     )
@@ -22,15 +23,19 @@ export const subscribeToPlayers = (
 
 export const subscribeToMessages = (
   roomId: string,
-  handler: (payload: { type: 'INSERT'; record: MessageRow }) => void
+  handler: (payload: { type: 'INSERT' | 'DELETE'; record: MessageRow }) => void
 ) => {
   if (!supabase) return null;
   const channel = supabase
     .channel(`room-messages-${roomId}`)
     .on(
       'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'room_messages', filter: `room_id=eq.${roomId}` },
-      (payload) => handler({ type: 'INSERT', record: payload.new as MessageRow })
+      { event: '*', schema: 'public', table: 'room_messages', filter: `room_id=eq.${roomId}` },
+      (payload) => {
+        const record = (payload.new || payload.old) as MessageRow | null;
+        if (!record) return;
+        handler({ type: payload.eventType as 'INSERT' | 'DELETE', record });
+      }
     )
     .subscribe();
   return channel;
@@ -46,7 +51,11 @@ export const subscribeToRoom = (
     .on(
       'postgres_changes',
       { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` },
-      (payload) => handler({ type: 'UPDATE', record: payload.new as RoomRow })
+      (payload) => {
+        const record = payload.new as RoomRow | null;
+        if (!record) return;
+        handler({ type: 'UPDATE', record });
+      }
     )
     .subscribe();
   return channel;

@@ -8,10 +8,10 @@ import { randomRoomCode } from './utils/random';
 import { readStoredRoom, persistRoomSnapshot, writeStoredRoom } from './utils/storage';
 import { createRoom, getRoomByCode, updateRoomState } from './supabase/repositories/rooms';
 import { addPlayer, listPlayers, updatePlayerPoints, removePlayer } from './supabase/repositories/players';
-import { addMessage as addRemoteMessage, listMessages } from './supabase/repositories/messages';
+import { addMessage as addRemoteMessage, listMessages, clearMessages } from './supabase/repositories/messages';
 import { subscribeToPlayers, subscribeToMessages, subscribeToRoom } from './supabase/subscriptions';
 import type { PlayerRow, MessageRow, RoomRow } from './supabase/types';
-import { supabase } from './supabase/client';
+import { supabase, supabaseRestUrl, supabaseKey } from './supabase/client';
 import HomeScreen from './components/HomeScreen';
 import JoinScreen from './components/JoinScreen';
 import UsernameScreen from './components/UsernameScreen';
@@ -49,6 +49,7 @@ const mapPlayerRow = (row: PlayerRow, myId: string | null): Player => ({
 });
 
 const mapMessageRow = (row: MessageRow): Message => ({
+  id: row.id,
   type: row.type,
   text: row.text,
   player: undefined,
@@ -117,8 +118,61 @@ const App = () => {
     return () => window.clearInterval(interval);
   }, [difficulty, messages.length]);
 
+  // Remove myself on tab close/navigation for online games
+  useEffect(() => {
+    if (gameMode !== 'online' || !myPlayerId) return;
+    const handleLeave = () => {
+      // try fast fetch with keepalive
+      if (supabaseRestUrl && supabaseKey) {
+        void fetch(`${supabaseRestUrl}/room_players?id=eq.${myPlayerId}`, {
+          method: 'DELETE',
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`
+          },
+          keepalive: true
+        });
+      } else {
+        void removePlayer(myPlayerId);
+      }
+    };
+    window.addEventListener('beforeunload', handleLeave);
+    window.addEventListener('pagehide', handleLeave);
+    return () => {
+      window.removeEventListener('beforeunload', handleLeave);
+      window.removeEventListener('pagehide', handleLeave);
+    };
+  }, [gameMode, myPlayerId]);
+
   const persistRoom = (code: string, playerList: Player[], level: Difficulty) => {
     persistRoomSnapshot(code, playerList, level, setStoredRoom);
+  };
+
+  const addLocalMessage = (msg: Message) =>
+    setMessages((prev) => {
+      if (msg.id && prev.some((m) => m.id === msg.id)) return prev;
+      if (!msg.id && prev.some((m) => m.type === msg.type && m.text === msg.text && m.timestamp === msg.timestamp)) {
+        return prev;
+      }
+      return [...prev, msg];
+    });
+
+  const sendMessage = async (msg: Message) => {
+    if (gameMode === 'online' && roomId) {
+      const remote = await addRemoteMessage({
+        roomId,
+        playerId: msg.playerId ?? (msg.type === 'play' || msg.type === 'error' ? myPlayerId : undefined),
+        type: msg.type,
+        text: msg.text,
+        number: msg.number,
+        correctRoman: msg.correctRoman
+      });
+      if (remote) {
+        addLocalMessage(mapMessageRow(remote));
+      }
+    } else {
+      addLocalMessage(msg);
+    }
   };
 
   const resetGameState = () => {
@@ -242,8 +296,16 @@ const App = () => {
       });
     });
 
-    messageChannelRef.current = subscribeToMessages(room.id, ({ record }) => {
-      setMessages((prev) => [...prev, mapMessageRow(record)]);
+    messageChannelRef.current = subscribeToMessages(room.id, ({ type, record }) => {
+      setMessages((prev) => {
+        if (type === 'DELETE') {
+          if (!record.id) return prev;
+          return prev.filter((m) => m.id !== record.id);
+        }
+        const mapped = mapMessageRow(record);
+        if (mapped.id && prev.some((m) => m.id === mapped.id)) return prev;
+        return [...prev, mapped];
+      });
     });
 
     roomChannelRef.current = subscribeToRoom(room.id, ({ record }) => {
@@ -278,6 +340,12 @@ const App = () => {
         setUsername(playerName);
         await hydrateFromRoom(newRoom, myRemote.id);
         attachRealtime(newRoom, myRemote.id);
+        await sendMessage({
+          type: 'system',
+          text: `${playerName} ha creato la partita.`,
+          playerId: myRemote.id,
+          timestamp: Date.now()
+        });
         setMode('create');
         setGameMode('online');
         setScreen('game');
@@ -297,6 +365,12 @@ const App = () => {
         setUsername(playerName);
         await hydrateFromRoom(existingRoom, myRemote.id);
         attachRealtime(existingRoom, myRemote.id);
+        await sendMessage({
+          type: 'system',
+          text: `${playerName} è entrato nella partita.`,
+          playerId: myRemote.id,
+          timestamp: Date.now()
+        });
         setMode('join');
         setGameMode('online');
         setScreen('game');
@@ -343,23 +417,40 @@ const App = () => {
     setScreen('game');
   };
 
-  const handleAddBot = () => {
-    if (!roomCode || gameMode === 'online') return;
-
+  const handleAddBot = async () => {
     const botNames = ['Samuele', 'Barbie', 'A Cadore', 'Tommy', 'Fra', 'Mela', 'Igor', 'Andrea la Valanga', 'Diana', 'Edo', 'Kledi', 'Martino del Trentino', 'Vince', 'Urcio', 'Vale'];
     const usedNames = new Set(players.map((p) => p.name));
     const availableNames = botNames.filter((name) => !usedNames.has(name));
     if (availableNames.length === 0) return;
 
     const botName = availableNames[Math.floor(Math.random() * availableNames.length)];
+
+    if (gameMode === 'online') {
+      if (!roomId) return;
+      const turnOrder = players.length;
+      const botRow = await addPlayer({
+        roomId,
+        name: botName,
+        isBot: true,
+        turnOrder
+      });
+      if (botRow) {
+        await sendMessage({
+          type: 'system',
+          text: `${botName} si unisce come bot.`,
+          playerId: botRow.id,
+          timestamp: Date.now()
+        });
+      }
+      return;
+    }
+
+    if (!roomCode) return;
     const newBot = createPlayer(botName, false, true);
     const updatedPlayers = [...players, newBot];
     setPlayers(updatedPlayers);
     persistRoom(roomCode, updatedPlayers, difficulty);
-    setMessages((prev) => [
-      ...prev,
-      { type: 'system', text: `${botName} si unisce come bot.`, timestamp: Date.now() }
-    ]);
+    void sendMessage({ type: 'system', text: `${botName} si unisce come bot.`, timestamp: Date.now() });
   };
 
   const handleRomanInput = async (letter: (typeof romanKeys)[number]) => {
@@ -377,60 +468,63 @@ const App = () => {
         text: `${currentPlayer.name} ha perso: combinazione non valida.`,
         number: currentNumber,
         correctRoman: targetRoman,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        playerId: currentPlayer.id
       };
       setGameOver(true);
-      setMessages((prev) => [...prev, newMessage]);
+      await sendMessage(newMessage);
       if (gameMode === 'online' && roomId) {
-        await addRemoteMessage({
-          roomId,
-          playerId: myPlayerId,
-          type: 'error',
-          text: newMessage.text,
-          number: currentNumber,
-          correctRoman: targetRoman
-        });
         await updateRoomState(roomId, { status: 'finished' });
       }
       return;
     }
 
-    if (gameMode === 'online' && roomId) {
-      await addRemoteMessage({
-        roomId,
-        playerId: myPlayerId,
-        type: 'play',
-        text: letter
-      });
-    } else {
-      setMessages((prev) => [...prev, { type: 'play', player: currentPlayer.name, text: letter, timestamp: Date.now() }]);
-    }
+    const nextPlayerIndexValue = nextIndex(currentPlayerIndex, players);
+    const playMessage: Message = {
+      type: 'play',
+      player: currentPlayer.name,
+      playerId: currentPlayer.id,
+      text: letter,
+      timestamp: Date.now()
+    };
+
+    await sendMessage(playMessage);
 
     if (candidate === targetRoman) {
-      setPlayers((prev) => {
-        const next = prev.map((player, idx) =>
-          idx === currentPlayerIndex ? { ...player, points: player.points + 1 } : player
-        );
-        if (gameMode === 'offline') {
+      if (gameMode === 'offline') {
+        setPlayers((prev) => {
+          const next = prev.map((player, idx) =>
+            idx === currentPlayerIndex ? { ...player, points: player.points + 1 } : player
+          );
           persistRoom(roomCode, next, difficulty);
-        } else if (gameMode === 'online' && currentPlayer.id) {
+          return next;
+        });
+        setCurrentNumber((prev) => prev + 1);
+        setCurrentRoman('');
+        setCurrentPlayerIndex(nextPlayerIndexValue);
+      } else if (gameMode === 'online') {
+        if (currentPlayer.id) {
           void updatePlayerPoints(currentPlayer.id, currentPlayer.points + 1);
         }
-        return next;
-      });
-      setCurrentNumber((prev) => prev + 1);
-      setCurrentRoman('');
-      if (gameMode === 'online' && roomId) {
-        await updateRoomState(roomId, {
-          current_number: currentNumber + 1,
-          current_player_index: nextIndex(currentPlayerIndex, players)
-        });
+        setCurrentRoman('');
+        setCurrentPlayerIndex(nextPlayerIndexValue);
+        if (roomId) {
+          await updateRoomState(roomId, {
+            current_number: currentNumber + 1,
+            current_player_index: nextPlayerIndexValue
+          });
+        }
       }
     } else {
       setCurrentRoman(candidate);
+      setCurrentPlayerIndex(nextPlayerIndexValue);
+      if (gameMode === 'online' && roomId) {
+        await updateRoomState(roomId, {
+          current_number: currentNumber,
+          current_player_index: nextPlayerIndexValue
+        });
+      }
     }
-
-    setCurrentPlayerIndex((prev) => nextIndex(prev, players));
   };
 
   useEffect(() => {
@@ -445,7 +539,13 @@ const App = () => {
     const timer = window.setTimeout(() => {
       const candidate = currentRoman + nextLetter;
 
-      setMessages((prev) => [...prev, { type: 'play', player: currentPlayer.name, text: nextLetter, timestamp: Date.now() }]);
+      addLocalMessage({
+        type: 'play',
+        player: currentPlayer.name,
+        playerId: currentPlayer.id,
+        text: nextLetter,
+        timestamp: Date.now()
+      });
 
       if (candidate === targetRoman) {
         setPlayers((prev) => {
@@ -467,18 +567,25 @@ const App = () => {
     return () => window.clearTimeout(timer);
   }, [players, currentPlayerIndex, currentNumber, currentRoman, gameOver, roomCode, difficulty, gameMode]);
 
-  const handleRestart = () => {
+  const handleRestart = async () => {
     if (players.length === 0) return;
     const startIndex = Math.floor(Math.random() * players.length);
 
     setGameOver(false);
-    setMessages([
-      {
-        type: 'system',
-        text: `Nuova partita! Inizia ${players[startIndex].name}.`,
-        timestamp: Date.now()
-      }
-    ]);
+    const restartMessage: Message = {
+      type: 'system',
+      text: `Nuova partita! Inizia ${players[startIndex].name}.`,
+      timestamp: Date.now()
+    };
+
+    if (gameMode === 'online' && roomId) {
+      await clearMessages(roomId);
+      setMessages([]);
+      await sendMessage(restartMessage);
+    } else {
+      setMessages([restartMessage]);
+    }
+
     setPlayers((prev) => {
       const next = prev.map((player) => ({ ...player, points: 0 }));
       if (gameMode === 'offline') {
@@ -576,6 +683,8 @@ const App = () => {
         onDifficultyChange={handleDifficultyChange}
         error={onlineError}
         loading={onlineLoading}
+        showDifficulty={mode === 'create'}
+        showRoomCode={mode === 'create'}
       />
     );
   }
@@ -598,6 +707,7 @@ const App = () => {
           currentPlayerIndex={currentPlayerIndex}
           gameOver={gameOver}
           onAddBot={handleAddBot}
+          canAddBot={gameMode === 'offline'}
         />
 
         <ChatFeed
@@ -629,7 +739,10 @@ const App = () => {
           {!gameOver && (
             <Keyboard
               keys={romanKeys}
-              disabled={!activePlayer?.isMe}
+              disabled={
+                !activePlayer?.isMe
+                || (gameMode === 'online' && players.length < 2)
+              }
               activePlayerName={activePlayer?.name}
               onKeyPress={(key) => handleRomanInput(key as (typeof romanKeys)[number])}
             />
