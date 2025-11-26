@@ -6,21 +6,11 @@
   --accent-strong: #ff6e99;
   --text: #e9ecf5;
   --muted: #b1b7c9;
-}
-
-html,
-body {
-  height: 100%;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  background: var(--bg);
-}
-
-.app-shell {
-  min-height: 100dvh;
-  background: radial-gradient(
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --bg-gradient: radial-gradient(
       circle at 20% 20%,
       rgba(255, 110, 153, 0.18),
       transparent 30%
@@ -36,20 +26,38 @@ body {
       transparent 30%
     ),
     var(--bg);
+}
+
+html,
+body {
+  min-height: 100svh;
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg-gradient);
+}
+
+.app-shell {
+  min-height: 100svh;
+  height: 100%;
+  background: var(--bg-gradient);
   color: var(--text);
   display: flex;
   align-items: stretch;
   justify-content: stretch;
-  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0)
-    env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
   width: 100%;
   overflow: hidden;
 }
 
 .game-shell {
+  display: flex;
   flex-direction: column;
+  flex: 1;
   width: 100%;
-  height: 100dvh;
+  height: calc(100svh - var(--safe-top) - var(--safe-bottom));
+  min-height: 0;
   max-width: 100%;
   overflow: hidden;
 }
@@ -365,7 +373,6 @@ body {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  flex: 1;
 }
 
 .toolbar-right {
@@ -781,4 +788,3 @@ body {
   background: linear-gradient(135deg, var(--accent-strong), var(--accent));
   transition: width 0.2s linear;
 }
-
