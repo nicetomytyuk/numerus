@@ -97,6 +97,7 @@ const App = () => {
   const [currentRoman, setCurrentRoman] = useState('');
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
   const [gameOver, setGameOver] = useState(false);
+  const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [storedRoom, setStoredRoom] = useState<StoredRoom | null>(() => storedRoomData);
   const [difficulty, setDifficulty] = useState<Difficulty>(() => initialDifficulty);
@@ -106,6 +107,7 @@ const App = () => {
   const [onlineError, setOnlineError] = useState('');
   const [onlineSession, setOnlineSession] = useState<StoredOnlineSession | null>(() => readOnlineSession());
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const turnDeadlineRef = useRef<number | null>(null);
   const playerChannelRef = useRef<ReturnType<typeof subscribeToPlayers> | null>(null);
   const messageChannelRef = useRef<ReturnType<typeof subscribeToMessages> | null>(null);
   const roomChannelRef = useRef<ReturnType<typeof subscribeToRoom> | null>(null);
@@ -116,6 +118,46 @@ const App = () => {
     setOnlineSession(session);
     writeOnlineSession(session);
   };
+
+  const startTurnTimer = useCallback(
+    (humanCountOverride?: number) => {
+      const humans = humanCountOverride ?? players.filter((p) => !p.isBot).length;
+      if (gameOver) {
+        turnDeadlineRef.current = null;
+        setTurnDeadline(null);
+        return;
+      }
+      if (gameMode === 'online' && humans < 2) {
+        turnDeadlineRef.current = null;
+        setTurnDeadline(null);
+        return;
+      }
+      const deadline = Date.now() + 10000;
+      turnDeadlineRef.current = deadline;
+      setTurnDeadline(deadline);
+    },
+    [gameMode, players, gameOver]
+  );
+
+  const hydrateFromRoom = useCallback(async (room: RoomRow, myId: string) => {
+    const [remotePlayers, remoteMessages] = await Promise.all([
+      listPlayers(room.id),
+      listMessages(room.id)
+    ]);
+    setRoomId(room.id);
+    setRoomCode(room.code);
+    setDifficulty(room.difficulty);
+    setShowHints(room.show_hints);
+    setCurrentNumber(room.current_number);
+    setCurrentPlayerIndex(room.current_player_index);
+    setGameOver(room.status === 'finished');
+    startTurnTimer(remotePlayers.filter((p) => !p.is_bot).length);
+    const sortedPlayers = remotePlayers
+      .map((p) => mapPlayerRow(p, myId))
+      .sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+    setPlayers(sortedPlayers);
+    setMessages(remoteMessages.map(mapMessageRow));
+  }, [startTurnTimer]);
 
   const sendMessage = useCallback(async (msg: Message) => {
     if (gameMode === 'online' && roomId) {
@@ -134,6 +176,22 @@ const App = () => {
       addLocalMessage(msg);
     }
   }, [gameMode, roomId, myPlayerId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    setPlayerNames((prev) => {
+      const next = { ...prev };
+      players.forEach((p) => {
+        if (p.id && !next[p.id]) {
+          next[p.id] = p.name;
+        }
+      });
+      return next;
+    });
+  }, [players]);
 
   const attachRealtime = useCallback((room: RoomRow, myId: string, playerName: string) => {
     playerChannelRef.current?.unsubscribe?.();
@@ -180,6 +238,7 @@ const App = () => {
       setGameOver(record.status === 'finished');
       setDifficulty(record.difficulty);
       setShowHints(record.show_hints);
+      startTurnTimer();
     });
 
     presenceChannelRef.current = createPresenceChannel(room.id, myId, playerName, {
@@ -210,23 +269,7 @@ const App = () => {
         });
       }
     });
-  }, [sendMessage]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  useEffect(() => {
-    setPlayerNames((prev) => {
-      const next = { ...prev };
-      players.forEach((p) => {
-        if (p.id && !next[p.id]) {
-          next[p.id] = p.name;
-        }
-      });
-      return next;
-    });
-  }, [players]);
+  }, [sendMessage, startTurnTimer]);
 
   useEffect(() => {
     if (difficulty !== 'hard') return;
@@ -246,6 +289,29 @@ const App = () => {
     const interval = window.setInterval(() => setNow(Date.now()), 150);
     return () => window.clearInterval(interval);
   }, [difficulty, messages.length]);
+
+  useEffect(() => {
+    if (!turnDeadline || gameOver || players.length === 0) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 200);
+    return () => window.clearInterval(interval);
+  }, [turnDeadline, gameOver, players.length]);
+
+  useEffect(() => {
+    if (gameMode !== 'online') return;
+    const humans = players.filter((p) => !p.isBot).length;
+    if (humans < 2) {
+      turnDeadlineRef.current = null;
+      setTurnDeadline(null);
+    }
+  }, [gameMode, players]);
+
+  useEffect(() => {
+    if (gameMode !== 'online') return;
+    const humans = players.filter((p) => !p.isBot).length;
+    if (humans >= 2 && !turnDeadline && !gameOver) {
+      startTurnTimer(humans);
+    }
+  }, [gameMode, players, turnDeadline, gameOver, startTurnTimer]);
 
   useEffect(() => {
     if (!routeRoomId) return;
@@ -300,7 +366,7 @@ const App = () => {
         setOnlineLoading(false);
       }
     })();
-  }, [routeRoomId, roomId, myPlayerId, navigate, onlineSession, attachRealtime]);
+  }, [routeRoomId, roomId, myPlayerId, navigate, onlineSession, attachRealtime, hydrateFromRoom]);
 
   // Remove myself on tab close/navigation for online games
   const persistRoom = (code: string, playerList: Player[], level: Difficulty) => {
@@ -323,6 +389,8 @@ const App = () => {
     presenceChannelRef.current?.unsubscribe?.();
     pendingRemovalRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
     pendingRemovalRef.current.clear();
+    turnDeadlineRef.current = null;
+    setTurnDeadline(null);
     playerChannelRef.current = null;
     messageChannelRef.current = null;
     roomChannelRef.current = null;
@@ -402,25 +470,6 @@ const App = () => {
     }
   };
 
-  const hydrateFromRoom = async (room: RoomRow, myId: string) => {
-    const [remotePlayers, remoteMessages] = await Promise.all([
-      listPlayers(room.id),
-      listMessages(room.id)
-    ]);
-    setRoomId(room.id);
-    setRoomCode(room.code);
-    setDifficulty(room.difficulty);
-    setShowHints(room.show_hints);
-    setCurrentNumber(room.current_number);
-    setCurrentPlayerIndex(room.current_player_index);
-    setGameOver(room.status === 'finished');
-    const sortedPlayers = remotePlayers
-      .map((p) => mapPlayerRow(p, myId))
-      .sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
-    setPlayers(sortedPlayers);
-    setMessages(remoteMessages.map(mapMessageRow));
-  };
-
   const startOnlineSession = async (playerName: string) => {
     if (!supabase) {
       setOnlineError('Configurare Supabase per giocare online.');
@@ -456,6 +505,7 @@ const App = () => {
           playerId: myRemote.id,
           timestamp: Date.now()
         });
+        startTurnTimer(1);
         navigate(`/game/${newRoom.id}`);
         setMode('create');
         setGameMode('online');
@@ -488,6 +538,7 @@ const App = () => {
           playerId: myRemote.id,
           timestamp: Date.now()
         });
+        startTurnTimer(currentPlayers.filter((p) => !p.is_bot).length + 1);
         navigate(`/game/${existingRoom.id}`);
         setMode('join');
         setGameMode('online');
@@ -529,6 +580,7 @@ const App = () => {
       }
     ]);
     setCurrentPlayerIndex(updatedPlayers.length === 1 ? 0 : updatedPlayers.length - 1);
+    startTurnTimer();
     setGameOver(false);
     setCurrentNumber(1);
     setCurrentRoman('');
@@ -590,6 +642,7 @@ const App = () => {
         playerId: currentPlayer.id
       };
       setGameOver(true);
+      setTurnDeadline(null);
       await sendMessage(newMessage);
       if (gameMode === 'online' && roomId) {
         await updateRoomState(roomId, { status: 'finished' });
@@ -619,6 +672,7 @@ const App = () => {
         });
         setCurrentNumber((prev) => prev + 1);
         setCurrentRoman('');
+        startTurnTimer();
         setCurrentPlayerIndex(nextPlayerIndexValue);
       } else if (gameMode === 'online') {
         if (currentPlayer.id) {
@@ -626,6 +680,7 @@ const App = () => {
         }
         setCurrentRoman('');
         setCurrentPlayerIndex(nextPlayerIndexValue);
+        startTurnTimer();
         if (roomId) {
           await updateRoomState(roomId, {
             current_number: currentNumber + 1,
@@ -636,6 +691,7 @@ const App = () => {
     } else {
       setCurrentRoman(candidate);
       setCurrentPlayerIndex(nextPlayerIndexValue);
+      startTurnTimer();
       if (gameMode === 'online' && roomId) {
         await updateRoomState(roomId, {
           current_number: currentNumber,
@@ -675,6 +731,7 @@ const App = () => {
         });
         setCurrentNumber((prev) => prev + 1);
         setCurrentRoman('');
+        startTurnTimer();
       } else {
         setCurrentRoman(candidate);
       }
@@ -683,7 +740,7 @@ const App = () => {
     }, 650);
 
     return () => window.clearTimeout(timer);
-  }, [players, currentPlayerIndex, currentNumber, currentRoman, gameOver, roomCode, difficulty, gameMode]);
+  }, [players, currentPlayerIndex, currentNumber, currentRoman, gameOver, roomCode, difficulty, gameMode, startTurnTimer]);
 
   const handleRestart = async () => {
     if (players.length === 0) return;
@@ -725,6 +782,7 @@ const App = () => {
     setCurrentNumber(1);
     setCurrentRoman('');
     setCurrentPlayerIndex(startIndex);
+    startTurnTimer();
   };
 
   const copyRoomCode = async () => {
@@ -750,6 +808,39 @@ const App = () => {
     setScreen('home');
     navigate('/');
   };
+
+  useEffect(() => {
+    if (!turnDeadline || gameOver || players.length === 0) return;
+    const activePlayer = players[currentPlayerIndex];
+    const iAmTurn = gameMode === 'offline' || activePlayer?.isMe;
+    if (!iAmTurn) return;
+
+    const tick = () => {
+      if (!turnDeadlineRef.current) return;
+      const nowTs = Date.now();
+      if (nowTs >= turnDeadlineRef.current) {
+        const nextIdx = nextIndex(currentPlayerIndex, players);
+        setCurrentPlayerIndex(nextIdx);
+        setCurrentRoman('');
+        startTurnTimer();
+        void sendMessage({
+          type: 'system',
+          text: `${activePlayer?.name ?? 'Un giocatore'} ha finito il tempo.`,
+          playerId: activePlayer?.id,
+          timestamp: Date.now()
+        });
+        if (gameMode === 'online' && roomId) {
+          void updateRoomState(roomId, {
+            current_number: currentNumber,
+            current_player_index: nextIdx
+          });
+        }
+      }
+    };
+
+    const interval = window.setInterval(tick, 200);
+    return () => window.clearInterval(interval);
+  }, [turnDeadline, gameOver, players, currentPlayerIndex, gameMode, roomId, currentNumber, sendMessage, startTurnTimer]);
 
   const handleDifficultyChange = (value: Difficulty) => {
     setDifficulty(value);
@@ -781,6 +872,10 @@ const App = () => {
       </div>
     );
   }
+
+  const turnMs = turnDeadline ? Math.max(0, turnDeadline - now) : null;
+  const turnSeconds = turnMs !== null ? Math.max(0, Math.ceil(turnMs / 1000)) : null;
+  const turnProgress = turnMs !== null ? Math.max(0, Math.min(1, turnMs / 10000)) : null;
 
   if (screen === 'home') {
     return (
@@ -861,6 +956,20 @@ const App = () => {
         />
 
         <div className="bottom-panel">
+          {turnSeconds !== null && !gameOver && (
+            <div className="turn-timer-shell">
+              <div className="turn-timer-header">
+                <span>Tempo rimanente</span>
+                <strong>{turnSeconds.toString().padStart(2, '0')}s</strong>
+              </div>
+              <div className="turn-timer-bar">
+                <div
+                  className="turn-timer-fill"
+                  style={{ width: `${(turnProgress ?? 0) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
           {!gameOver && showHints && (
             <StatusCard
               numberLabel="Numero da comporre"
