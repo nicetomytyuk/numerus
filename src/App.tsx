@@ -53,6 +53,7 @@ const mapPlayerRow = (row: PlayerRow, myId: string | null): Player => ({
   name: row.name,
   isMe: row.id === myId,
   isBot: row.is_bot,
+  isOwner: row.is_owner,
   points: row.points,
   turnOrder: row.turn_order
 });
@@ -113,6 +114,7 @@ const App = () => {
   const roomChannelRef = useRef<ReturnType<typeof subscribeToRoom> | null>(null);
   const presenceChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
   const pendingRemovalRef = useRef<Map<string, number>>(new Map());
+  const manualExitRef = useRef(false);
 
   const persistOnlineSessionState = (session: StoredOnlineSession | null) => {
     setOnlineSession(session);
@@ -216,14 +218,50 @@ const App = () => {
     });
 
     messageChannelRef.current = subscribeToMessages(room.id, ({ type, record }) => {
-      setMessages((prev) => {
-        if (type === 'DELETE') {
+      if (type === 'DELETE') {
+        setMessages((prev) => {
           if (!record.id) return prev;
           return prev.filter((m) => m.id !== record.id);
-        }
-        const mapped = mapMessageRow(record);
+        });
+        return;
+      }
+
+      const mapped = mapMessageRow(record);
+
+      setMessages((prev) => {
         if (mapped.id && prev.some((m) => m.id === mapped.id)) return prev;
-        return [...prev, mapped];
+        const nextMessages = [...prev, mapped];
+
+        if (mapped.type === 'play') {
+          const effectiveNumber = mapped.number ?? currentNumber;
+          if (mapped.number && mapped.number > currentNumber) {
+            setCurrentNumber(mapped.number);
+          }
+          const assembled = nextMessages
+            .filter((m) => m.type === 'play' && (m.number ?? effectiveNumber) === effectiveNumber)
+            .map((m) => m.text)
+            .join('');
+          setCurrentRoman(assembled);
+
+          const iAmOwner = players.some((p) => p.isMe && p.isOwner);
+          const target = convertToRoman(effectiveNumber);
+          if (iAmOwner && assembled === target) {
+            const nextIdx = nextIndex(currentPlayerIndex, players);
+            const nextNumber = effectiveNumber + 1;
+            setCurrentNumber(nextNumber);
+            setCurrentRoman('');
+            setCurrentPlayerIndex(nextIdx);
+            startTurnTimer();
+            if (roomId) {
+              void updateRoomState(roomId, {
+                current_number: nextNumber,
+                current_player_index: nextIdx
+              });
+            }
+          }
+        }
+
+        return nextMessages;
       });
     });
 
@@ -269,7 +307,7 @@ const App = () => {
         });
       }
     });
-  }, [sendMessage, startTurnTimer]);
+  }, [sendMessage, startTurnTimer, currentNumber, currentPlayerIndex, players, roomId]);
 
   useEffect(() => {
     if (difficulty !== 'hard') return;
@@ -315,6 +353,10 @@ const App = () => {
 
   useEffect(() => {
     if (!routeRoomId) return;
+    if (manualExitRef.current) {
+      manualExitRef.current = false;
+      return;
+    }
     if (!supabase) {
       setOnlineError('Configurare Supabase per giocare online.');
       navigate('/');
@@ -656,6 +698,7 @@ const App = () => {
       player: currentPlayer.name,
       playerId: currentPlayer.id,
       text: letter,
+      number: currentNumber,
       timestamp: Date.now()
     };
 
@@ -678,12 +721,14 @@ const App = () => {
         if (currentPlayer.id) {
           void updatePlayerPoints(currentPlayer.id, currentPlayer.points + 1);
         }
+        const nextNumber = currentNumber + 1;
+        setCurrentNumber(nextNumber);
         setCurrentRoman('');
         setCurrentPlayerIndex(nextPlayerIndexValue);
         startTurnTimer();
         if (roomId) {
           await updateRoomState(roomId, {
-            current_number: currentNumber + 1,
+            current_number: nextNumber,
             current_player_index: nextPlayerIndexValue
           });
         }
@@ -797,6 +842,7 @@ const App = () => {
   };
 
   const handleExit = () => {
+    manualExitRef.current = true;
     if (gameMode === 'online' && myPlayerId) {
       void removePlayer(myPlayerId);
     }
@@ -806,7 +852,11 @@ const App = () => {
     writeStoredRoom(null);
     setStoredRoom(null);
     setScreen('home');
-    navigate('/');
+    setMode('create');
+    setGameMode('offline');
+    setOnlineError('');
+    setOnlineLoading(false);
+    navigate('/', { replace: true });
   };
 
   useEffect(() => {

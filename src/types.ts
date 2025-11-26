@@ -8,6 +8,7 @@ export type Player = {
   name: string;
   isMe: boolean;
   isBot?: boolean;
+  isOwner?: boolean;
   points: number;
   turnOrder?: number;
 };
