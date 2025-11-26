@@ -703,11 +703,11 @@ const App = () => {
 
         <ChatFeed
           messages={messages}
-          gameOver={gameOver}
-          difficulty={difficulty}
-          now={now}
-          players={players}
-          endRef={messagesEndRef}
+        gameOver={gameOver}
+        difficulty={difficulty}
+        now={now}
+        players={players}
+        endRef={messagesEndRef}
         />
 
         <div className="bottom-panel">
@@ -728,16 +728,23 @@ const App = () => {
           )}
 
           {!gameOver && (
-            <Keyboard
-              keys={romanKeys}
-              disabled={
-                !activePlayer?.isMe
-                || (gameMode === 'online' && players.length < 2)
-              }
-              activePlayerName={activePlayer?.name}
-              onKeyPress={(key) => handleRomanInput(key as (typeof romanKeys)[number])}
-            />
-          )}
+          <Keyboard
+            keys={romanKeys}
+            disabled={
+              !activePlayer?.isMe
+              || (gameMode === 'online' && players.length < 2)
+            }
+            activePlayerName={activePlayer?.name}
+            overlayLabel={
+              gameMode === 'online' && players.length < 2
+                ? 'In attesa di altri giocatori...'
+                : activePlayer?.name
+                  ? `È il turno di ${activePlayer.name}`
+                  : 'In attesa di altri giocatori...'
+            }
+            onKeyPress={(key) => handleRomanInput(key as (typeof romanKeys)[number])}
+          />
+        )}
         </div>
       </div>
     </div>
