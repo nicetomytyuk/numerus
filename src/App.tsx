@@ -923,7 +923,8 @@ const App = () => {
     );
   }
 
-  const turnMs = turnDeadline ? Math.max(0, turnDeadline - now) : null;
+  const liveNow = Date.now();
+  const turnMs = turnDeadline ? Math.max(0, turnDeadline - liveNow) : null;
   const turnSeconds = turnMs !== null ? Math.max(0, Math.ceil(turnMs / 1000)) : null;
   const turnProgress = turnMs !== null ? Math.max(0, Math.min(1, turnMs / 10000)) : null;
 
