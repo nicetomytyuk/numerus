@@ -1,4 +1,4 @@
-import { RefObject } from 'react';
+import type { RefObject } from 'react';
 import type { Difficulty, Message, Player } from '../types';
 import { HARD_MESSAGE_LIFETIME, HARD_VANISH_DURATION } from '../constants';
 
