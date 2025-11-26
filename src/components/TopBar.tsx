@@ -17,10 +17,12 @@ const TopBar = ({ myPoints, username, roomCode, copied, onCopy, onExit, showRoom
         <Trophy size={18} />
         <span>{myPoints} pt</span>
       </div>
-      <div className="toolbar-item">
-        <Users size={18} />
-        <span>{username || 'Tu'}</span>
-      </div>
+      {username && (
+        <div className="toolbar-item">
+          <Users size={18} />
+          <span>{username}</span>
+        </div>
+      )}
     </div>
     <div className="toolbar-right">
       {showRoomCode && (

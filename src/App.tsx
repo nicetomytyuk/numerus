@@ -76,9 +76,13 @@ const App = () => {
     ? storedRoomData.difficulty === 'easy'
     : (storedRoomData?.showHints ?? false);
 
-  const [screen, setScreen] = useState<Screen>('home');
-  const [mode, setMode] = useState<Mode>('create');
-  const [gameMode, setGameMode] = useState<GameMode>('offline');
+  const navigate = useNavigate();
+  const match = useMatch('/game/:roomId');
+  const routeRoomId = match?.params?.roomId ?? null;
+
+  const [screen, setScreen] = useState<Screen>(routeRoomId ? 'username' : 'home');
+  const [mode, setMode] = useState<Mode>(routeRoomId ? 'join' : 'create');
+  const [gameMode, setGameMode] = useState<GameMode>(routeRoomId ? 'online' : 'offline');
   const [roomCode, setRoomCode] = useState('');
   const [roomId, setRoomId] = useState<string | null>(null);
   const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
@@ -97,7 +101,7 @@ const App = () => {
   const [difficulty, setDifficulty] = useState<Difficulty>(() => initialDifficulty);
   const [showHints, setShowHints] = useState<boolean>(() => initialHints);
   const [now, setNow] = useState(() => Date.now());
-  const [onlineLoading, setOnlineLoading] = useState(false);
+  const [onlineLoading, setOnlineLoading] = useState(Boolean(routeRoomId));
   const [onlineError, setOnlineError] = useState('');
   const [onlineSession, setOnlineSession] = useState<StoredOnlineSession | null>(() => readOnlineSession());
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -105,9 +109,7 @@ const App = () => {
   const messageChannelRef = useRef<ReturnType<typeof subscribeToMessages> | null>(null);
   const roomChannelRef = useRef<ReturnType<typeof subscribeToRoom> | null>(null);
   const presenceChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
-  const navigate = useNavigate();
-  const match = useMatch('/game/:roomId');
-  const routeRoomId = match?.params?.roomId ?? null;
+  const pendingRemovalRef = useRef<Map<string, number>>(new Map());
 
   const persistOnlineSessionState = (session: StoredOnlineSession | null) => {
     setOnlineSession(session);
@@ -175,18 +177,30 @@ const App = () => {
     });
 
     presenceChannelRef.current = createPresenceChannel(room.id, myId, playerName, {
-      onSync: () => {
-        // No-op: rely on leave events to prune disconnected clients.
+      onSync: (presentIds) => {
+        // Cancel any pending removal for players that are back.
+        presentIds.forEach((pid) => {
+          const timeoutId = pendingRemovalRef.current.get(pid);
+          if (timeoutId) {
+            window.clearTimeout(timeoutId);
+            pendingRemovalRef.current.delete(pid);
+          }
+        });
       },
       onLeave: (playersLeaving) => {
         playersLeaving.forEach(({ playerId, name }) => {
-          void removePlayer(playerId);
-          void sendMessage({
-            type: 'system',
-            text: `${name ?? 'Un giocatore'} ha lasciato la partita.`,
-            playerId,
-            timestamp: Date.now()
-          });
+          // Grace period before removing: allows a quick reload to rejoin.
+          const timeoutId = window.setTimeout(() => {
+            pendingRemovalRef.current.delete(playerId);
+            void removePlayer(playerId);
+            void sendMessage({
+              type: 'system',
+              text: `${name ?? 'Un giocatore'} ha lasciato la partita.`,
+              playerId,
+              timestamp: Date.now()
+            });
+          }, 2000);
+          pendingRemovalRef.current.set(playerId, timeoutId);
         });
       }
     });
@@ -289,6 +303,8 @@ const App = () => {
     messageChannelRef.current?.unsubscribe?.();
     roomChannelRef.current?.unsubscribe?.();
     presenceChannelRef.current?.unsubscribe?.();
+    pendingRemovalRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    pendingRemovalRef.current.clear();
     playerChannelRef.current = null;
     messageChannelRef.current = null;
     roomChannelRef.current = null;
@@ -727,6 +743,26 @@ const App = () => {
 
   const activePlayer = players[currentPlayerIndex];
   const myPoints = players.find((p) => p.isMe)?.points ?? 0;
+  const isRouteLoading = Boolean(routeRoomId && onlineLoading);
+
+  if (isRouteLoading) {
+    return (
+      <div className="app-shell game-shell">
+        <TopBar
+          myPoints={myPoints}
+          username={username}
+          roomCode={roomCode}
+          copied={copied}
+          onCopy={copyRoomCode}
+          onExit={handleExit}
+          showRoomCode={false}
+        />
+        <div className="game-body" style={{ alignItems: 'center', justifyContent: 'center' }}>
+          <p style={{ color: 'var(--muted)' }}>Riconnessione alla partita...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (screen === 'home') {
     return (
