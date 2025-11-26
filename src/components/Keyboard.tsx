@@ -2,10 +2,11 @@ type Props = {
   keys: readonly string[];
   disabled: boolean;
   activePlayerName?: string;
+  overlayLabel?: string;
   onKeyPress: (key: string) => void;
 };
 
-const Keyboard = ({ keys, disabled, activePlayerName, onKeyPress }: Props) => (
+const Keyboard = ({ keys, disabled, activePlayerName, overlayLabel, onKeyPress }: Props) => (
   <div className="keyboard-shell">
     <div className={`keyboard ${disabled ? 'disabled' : ''}`}>
       {keys.map((key) => (
@@ -16,7 +17,7 @@ const Keyboard = ({ keys, disabled, activePlayerName, onKeyPress }: Props) => (
     </div>
     {disabled && (
       <div className="keyboard-overlay">
-        Attendi il tuo turno: {activePlayerName || '...'}
+        {overlayLabel || `È il turno di ${activePlayerName || '...'}`}
       </div>
     )}
   </div>

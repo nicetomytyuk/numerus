@@ -8,8 +8,18 @@
   --muted: #b1b7c9;
 }
 
+html,
+body {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
 .app-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
   background: radial-gradient(
       circle at 20% 20%,
       rgba(255, 110, 153, 0.18),
@@ -30,14 +40,16 @@
   display: flex;
   align-items: stretch;
   justify-content: stretch;
-  padding: 0;
+  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0)
+    env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
   width: 100%;
+  overflow: hidden;
 }
 
 .game-shell {
   flex-direction: column;
   width: 100%;
-  height: 100vh;
+  height: 100dvh;
   max-width: 100%;
   overflow: hidden;
 }
@@ -421,7 +433,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow: visible;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .players-row {
@@ -450,7 +463,6 @@
 .chat {
   flex: 1;
   min-height: 0;
-  max-height: none;
   overflow-y: auto;
   border-radius: 18px;
   padding: 16px;
