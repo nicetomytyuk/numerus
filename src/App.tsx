@@ -1,12 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMatch, useNavigate } from 'react-router-dom';
 import './App.css';
 
 import type { Difficulty, Mode, Player, Screen, StoredRoom, Message, GameMode } from './types';
 import { romanKeys, HARD_MESSAGE_LIFETIME } from './constants';
 import { convertToRoman } from './utils/roman';
 import { randomRoomCode } from './utils/random';
-import { readStoredRoom, persistRoomSnapshot, writeStoredRoom } from './utils/storage';
-import { createRoom, getRoomByCode, updateRoomState } from './supabase/repositories/rooms';
+import {
+  readStoredRoom,
+  persistRoomSnapshot,
+  writeStoredRoom,
+  readOnlineSession,
+  writeOnlineSession
+} from './utils/storage';
+import type { StoredOnlineSession } from './utils/storage';
+import { createRoom, getRoomByCode, getRoomById, updateRoomState } from './supabase/repositories/rooms';
 import { addPlayer, listPlayers, updatePlayerPoints, removePlayer } from './supabase/repositories/players';
 import { addMessage as addRemoteMessage, listMessages, clearMessages } from './supabase/repositories/messages';
 import { subscribeToPlayers, subscribeToMessages, subscribeToRoom } from './supabase/subscriptions';
@@ -91,11 +99,20 @@ const App = () => {
   const [now, setNow] = useState(() => Date.now());
   const [onlineLoading, setOnlineLoading] = useState(false);
   const [onlineError, setOnlineError] = useState('');
+  const [onlineSession, setOnlineSession] = useState<StoredOnlineSession | null>(() => readOnlineSession());
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const playerChannelRef = useRef<ReturnType<typeof subscribeToPlayers> | null>(null);
   const messageChannelRef = useRef<ReturnType<typeof subscribeToMessages> | null>(null);
   const roomChannelRef = useRef<ReturnType<typeof subscribeToRoom> | null>(null);
   const presenceChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
+  const navigate = useNavigate();
+  const match = useMatch('/game/:roomId');
+  const routeRoomId = match?.params?.roomId ?? null;
+
+  const persistOnlineSessionState = (session: StoredOnlineSession | null) => {
+    setOnlineSession(session);
+    writeOnlineSession(session);
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -120,6 +137,61 @@ const App = () => {
     return () => window.clearInterval(interval);
   }, [difficulty, messages.length]);
 
+  useEffect(() => {
+    if (!routeRoomId) return;
+    if (!supabase) {
+      setOnlineError('Configurare Supabase per giocare online.');
+      navigate('/');
+      return;
+    }
+    if (roomId && myPlayerId && roomId === routeRoomId) return;
+
+    setGameMode('online');
+    setMode('join');
+    setOnlineLoading(true);
+    setOnlineError('');
+
+    void (async () => {
+      try {
+        const room = await getRoomById(routeRoomId);
+        if (!room) throw new Error('Stanza non trovata.');
+        const playersInRoom = await listPlayers(room.id);
+        const session = onlineSession;
+        const stillPresent = session
+          && session.roomId === room.id
+          && playersInRoom.some((p) => p.id === session.playerId);
+
+        if (session && stillPresent) {
+          setMyPlayerId(session.playerId);
+          setUsername(session.username);
+          await hydrateFromRoom(room, session.playerId);
+          attachRealtime(room, session.playerId, session.username);
+          setScreen('game');
+          return;
+        }
+
+        if (session && session.roomId === room.id) {
+          persistOnlineSessionState(null);
+        }
+
+        setRoomId(room.id);
+        setRoomCode(room.code);
+        setDifficulty(room.difficulty);
+        setShowHints(room.show_hints);
+        setCurrentNumber(room.current_number);
+        setCurrentPlayerIndex(room.current_player_index);
+        setGameOver(room.status === 'finished');
+        setScreen('username');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Errore online inatteso.';
+        setOnlineError(message);
+        navigate('/');
+      } finally {
+        setOnlineLoading(false);
+      }
+    })();
+  }, [routeRoomId, roomId, myPlayerId, navigate, onlineSession, attachRealtime]);
+
   // Remove myself on tab close/navigation for online games
   const persistRoom = (code: string, playerList: Player[], level: Difficulty) => {
     persistRoomSnapshot(code, playerList, level, setStoredRoom);
@@ -134,7 +206,7 @@ const App = () => {
       return [...prev, msg];
     });
 
-  const sendMessage = async (msg: Message) => {
+  const sendMessage = useCallback(async (msg: Message) => {
     if (gameMode === 'online' && roomId) {
       const remote = await addRemoteMessage({
         roomId,
@@ -150,7 +222,67 @@ const App = () => {
     } else {
       addLocalMessage(msg);
     }
-  };
+  }, [gameMode, roomId, myPlayerId]);
+
+  /* const attachRealtime = useCallback((room: RoomRow, myId: string, playerName: string) => {
+    playerChannelRef.current?.unsubscribe?.();
+    messageChannelRef.current?.unsubscribe?.();
+    roomChannelRef.current?.unsubscribe?.();
+    presenceChannelRef.current?.unsubscribe?.();
+
+    playerChannelRef.current = subscribeToPlayers(room.id, ({ type, record }) => {
+      setPlayers((prev) => {
+        const mapped = mapPlayerRow(record, myId);
+        if (type === 'DELETE') {
+          return prev.filter((p) => p.id !== record.id);
+        }
+        const exists = prev.find((p) => p.id === record.id);
+        if (exists) {
+          return prev
+            .map((p) => (p.id === record.id ? { ...mapped } : p))
+            .sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+        }
+        return [...prev, mapped].sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+      });
+    });
+
+    messageChannelRef.current = subscribeToMessages(room.id, ({ type, record }) => {
+      setMessages((prev) => {
+        if (type === 'DELETE') {
+          if (!record.id) return prev;
+          return prev.filter((m) => m.id !== record.id);
+        }
+        const mapped = mapMessageRow(record);
+        if (mapped.id && prev.some((m) => m.id === mapped.id)) return prev;
+        return [...prev, mapped];
+      });
+    });
+
+    roomChannelRef.current = subscribeToRoom(room.id, ({ record }) => {
+      setCurrentNumber(record.current_number);
+      setCurrentPlayerIndex(record.current_player_index);
+      setGameOver(record.status === 'finished');
+      setDifficulty(record.difficulty);
+      setShowHints(record.show_hints);
+    });
+
+    presenceChannelRef.current = createPresenceChannel(room.id, myId, playerName, {
+      onSync: () => {
+        // No-op: rely on leave events to prune disconnected clients.
+      },
+      onLeave: (playersLeaving) => {
+        playersLeaving.forEach(({ playerId, name }) => {
+          void removePlayer(playerId);
+          void sendMessage({
+            type: 'system',
+            text: `${name ?? 'Un giocatore'} ha lasciato la partita.`,
+            playerId,
+            timestamp: Date.now()
+          });
+        });
+      }
+    });
+  }, [sendMessage]); */
 
   const resetGameState = () => {
     playerChannelRef.current?.unsubscribe?.();
@@ -178,6 +310,7 @@ const App = () => {
     setGameMode('offline');
     setOnlineLoading(false);
     setOnlineError('');
+    persistOnlineSessionState(null);
   };
 
   const handleCreateGame = () => {
@@ -254,7 +387,7 @@ const App = () => {
     setMessages(remoteMessages.map(mapMessageRow));
   };
 
-  const attachRealtime = (room: RoomRow, myId: string, playerName: string) => {
+  const attachRealtime = useCallback((room: RoomRow, myId: string, playerName: string) => {
     playerChannelRef.current?.unsubscribe?.();
     messageChannelRef.current?.unsubscribe?.();
     roomChannelRef.current?.unsubscribe?.();
@@ -312,7 +445,7 @@ const App = () => {
         });
       }
     });
-  };
+  }, [sendMessage]);
 
   const startOnlineSession = async (playerName: string) => {
     if (!supabase) {
@@ -335,6 +468,12 @@ const App = () => {
         if (!myRemote) throw new Error('Impossibile creare il giocatore.');
         setMyPlayerId(myRemote.id);
         setUsername(playerName);
+        persistOnlineSessionState({
+          roomId: newRoom.id,
+          roomCode: newRoom.code,
+          playerId: myRemote.id,
+          username: playerName
+        });
         await hydrateFromRoom(newRoom, myRemote.id);
         attachRealtime(newRoom, myRemote.id, playerName);
         await sendMessage({
@@ -343,6 +482,7 @@ const App = () => {
           playerId: myRemote.id,
           timestamp: Date.now()
         });
+        navigate(`/game/${newRoom.id}`);
         setMode('create');
         setGameMode('online');
         setScreen('game');
@@ -360,6 +500,12 @@ const App = () => {
         if (!myRemote) throw new Error('Impossibile unirsi alla stanza.');
         setMyPlayerId(myRemote.id);
         setUsername(playerName);
+        persistOnlineSessionState({
+          roomId: existingRoom.id,
+          roomCode: existingRoom.code,
+          playerId: myRemote.id,
+          username: playerName
+        });
         await hydrateFromRoom(existingRoom, myRemote.id);
         attachRealtime(existingRoom, myRemote.id, playerName);
         await sendMessage({
@@ -368,6 +514,7 @@ const App = () => {
           playerId: myRemote.id,
           timestamp: Date.now()
         });
+        navigate(`/game/${existingRoom.id}`);
         setMode('join');
         setGameMode('online');
         setScreen('game');
@@ -621,11 +768,13 @@ const App = () => {
     if (gameMode === 'online' && myPlayerId) {
       void removePlayer(myPlayerId);
     }
+    persistOnlineSessionState(null);
     resetGameState();
     setRoomCode('');
     writeStoredRoom(null);
     setStoredRoom(null);
     setScreen('home');
+    navigate('/');
   };
 
   const handleDifficultyChange = (value: Difficulty) => {
