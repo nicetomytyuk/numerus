@@ -1,6 +1,8 @@
 import { storageKey, isDifficulty } from '../constants';
 import type { StoredRoom, Player, Difficulty } from '../types';
 
+const onlineSessionKey = 'numerus-online-session';
+
 export const readStoredRoom = (): StoredRoom | null => {
   if (typeof localStorage === 'undefined') return null;
   const raw = localStorage.getItem(storageKey);
@@ -31,6 +33,42 @@ export const readStoredRoom = (): StoredRoom | null => {
   } catch {
     return null;
   }
+};
+
+export type StoredOnlineSession = {
+  roomId: string;
+  roomCode: string;
+  playerId: string;
+  username: string;
+};
+
+export const readOnlineSession = (): StoredOnlineSession | null => {
+  if (typeof localStorage === 'undefined') return null;
+  const raw = localStorage.getItem(onlineSessionKey);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed?.roomId || !parsed?.playerId || !parsed?.username || !parsed?.roomCode) {
+      return null;
+    }
+    return {
+      roomId: String(parsed.roomId),
+      roomCode: String(parsed.roomCode),
+      playerId: String(parsed.playerId),
+      username: String(parsed.username)
+    };
+  } catch {
+    return null;
+  }
+};
+
+export const writeOnlineSession = (session: StoredOnlineSession | null) => {
+  if (typeof localStorage === 'undefined') return;
+  if (!session) {
+    localStorage.removeItem(onlineSessionKey);
+    return;
+  }
+  localStorage.setItem(onlineSessionKey, JSON.stringify(session));
 };
 
 export const writeStoredRoom = (room: StoredRoom | null) => {

@@ -114,6 +114,84 @@ const App = () => {
     writeOnlineSession(session);
   };
 
+  const sendMessage = useCallback(async (msg: Message) => {
+    if (gameMode === 'online' && roomId) {
+      const remote = await addRemoteMessage({
+        roomId,
+        playerId: msg.playerId ?? (msg.type === 'play' || msg.type === 'error' ? myPlayerId : undefined),
+        type: msg.type,
+        text: msg.text,
+        number: msg.number,
+        correctRoman: msg.correctRoman
+      });
+      if (remote) {
+        addLocalMessage(mapMessageRow(remote));
+      }
+    } else {
+      addLocalMessage(msg);
+    }
+  }, [gameMode, roomId, myPlayerId]);
+
+  const attachRealtime = useCallback((room: RoomRow, myId: string, playerName: string) => {
+    playerChannelRef.current?.unsubscribe?.();
+    messageChannelRef.current?.unsubscribe?.();
+    roomChannelRef.current?.unsubscribe?.();
+    presenceChannelRef.current?.unsubscribe?.();
+
+    playerChannelRef.current = subscribeToPlayers(room.id, ({ type, record }) => {
+      setPlayers((prev) => {
+        const mapped = mapPlayerRow(record, myId);
+        if (type === 'DELETE') {
+          return prev.filter((p) => p.id !== record.id);
+        }
+        const exists = prev.find((p) => p.id === record.id);
+        if (exists) {
+          return prev
+            .map((p) => (p.id === record.id ? { ...mapped } : p))
+            .sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+        }
+        return [...prev, mapped].sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+      });
+    });
+
+    messageChannelRef.current = subscribeToMessages(room.id, ({ type, record }) => {
+      setMessages((prev) => {
+        if (type === 'DELETE') {
+          if (!record.id) return prev;
+          return prev.filter((m) => m.id !== record.id);
+        }
+        const mapped = mapMessageRow(record);
+        if (mapped.id && prev.some((m) => m.id === mapped.id)) return prev;
+        return [...prev, mapped];
+      });
+    });
+
+    roomChannelRef.current = subscribeToRoom(room.id, ({ record }) => {
+      setCurrentNumber(record.current_number);
+      setCurrentPlayerIndex(record.current_player_index);
+      setGameOver(record.status === 'finished');
+      setDifficulty(record.difficulty);
+      setShowHints(record.show_hints);
+    });
+
+    presenceChannelRef.current = createPresenceChannel(room.id, myId, playerName, {
+      onSync: () => {
+        // No-op: rely on leave events to prune disconnected clients.
+      },
+      onLeave: (playersLeaving) => {
+        playersLeaving.forEach(({ playerId, name }) => {
+          void removePlayer(playerId);
+          void sendMessage({
+            type: 'system',
+            text: `${name ?? 'Un giocatore'} ha lasciato la partita.`,
+            playerId,
+            timestamp: Date.now()
+          });
+        });
+      }
+    });
+  }, [sendMessage]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -205,84 +283,6 @@ const App = () => {
       }
       return [...prev, msg];
     });
-
-  const sendMessage = useCallback(async (msg: Message) => {
-    if (gameMode === 'online' && roomId) {
-      const remote = await addRemoteMessage({
-        roomId,
-        playerId: msg.playerId ?? (msg.type === 'play' || msg.type === 'error' ? myPlayerId : undefined),
-        type: msg.type,
-        text: msg.text,
-        number: msg.number,
-        correctRoman: msg.correctRoman
-      });
-      if (remote) {
-        addLocalMessage(mapMessageRow(remote));
-      }
-    } else {
-      addLocalMessage(msg);
-    }
-  }, [gameMode, roomId, myPlayerId]);
-
-  /* const attachRealtime = useCallback((room: RoomRow, myId: string, playerName: string) => {
-    playerChannelRef.current?.unsubscribe?.();
-    messageChannelRef.current?.unsubscribe?.();
-    roomChannelRef.current?.unsubscribe?.();
-    presenceChannelRef.current?.unsubscribe?.();
-
-    playerChannelRef.current = subscribeToPlayers(room.id, ({ type, record }) => {
-      setPlayers((prev) => {
-        const mapped = mapPlayerRow(record, myId);
-        if (type === 'DELETE') {
-          return prev.filter((p) => p.id !== record.id);
-        }
-        const exists = prev.find((p) => p.id === record.id);
-        if (exists) {
-          return prev
-            .map((p) => (p.id === record.id ? { ...mapped } : p))
-            .sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
-        }
-        return [...prev, mapped].sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
-      });
-    });
-
-    messageChannelRef.current = subscribeToMessages(room.id, ({ type, record }) => {
-      setMessages((prev) => {
-        if (type === 'DELETE') {
-          if (!record.id) return prev;
-          return prev.filter((m) => m.id !== record.id);
-        }
-        const mapped = mapMessageRow(record);
-        if (mapped.id && prev.some((m) => m.id === mapped.id)) return prev;
-        return [...prev, mapped];
-      });
-    });
-
-    roomChannelRef.current = subscribeToRoom(room.id, ({ record }) => {
-      setCurrentNumber(record.current_number);
-      setCurrentPlayerIndex(record.current_player_index);
-      setGameOver(record.status === 'finished');
-      setDifficulty(record.difficulty);
-      setShowHints(record.show_hints);
-    });
-
-    presenceChannelRef.current = createPresenceChannel(room.id, myId, playerName, {
-      onSync: () => {
-        // No-op: rely on leave events to prune disconnected clients.
-      },
-      onLeave: (playersLeaving) => {
-        playersLeaving.forEach(({ playerId, name }) => {
-          void removePlayer(playerId);
-          void sendMessage({
-            type: 'system',
-            text: `${name ?? 'Un giocatore'} ha lasciato la partita.`,
-            playerId,
-            timestamp: Date.now()
-          });
-        });
-      }
-    });
-  }, [sendMessage]); */
 
   const resetGameState = () => {
     playerChannelRef.current?.unsubscribe?.();
@@ -386,66 +386,6 @@ const App = () => {
     setPlayers(sortedPlayers);
     setMessages(remoteMessages.map(mapMessageRow));
   };
-
-  const attachRealtime = useCallback((room: RoomRow, myId: string, playerName: string) => {
-    playerChannelRef.current?.unsubscribe?.();
-    messageChannelRef.current?.unsubscribe?.();
-    roomChannelRef.current?.unsubscribe?.();
-    presenceChannelRef.current?.unsubscribe?.();
-
-    playerChannelRef.current = subscribeToPlayers(room.id, ({ type, record }) => {
-      setPlayers((prev) => {
-        const mapped = mapPlayerRow(record, myId);
-        if (type === 'DELETE') {
-          return prev.filter((p) => p.id !== record.id);
-        }
-        const exists = prev.find((p) => p.id === record.id);
-        if (exists) {
-          return prev
-            .map((p) => (p.id === record.id ? { ...mapped } : p))
-            .sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
-        }
-        return [...prev, mapped].sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
-      });
-    });
-
-    messageChannelRef.current = subscribeToMessages(room.id, ({ type, record }) => {
-      setMessages((prev) => {
-        if (type === 'DELETE') {
-          if (!record.id) return prev;
-          return prev.filter((m) => m.id !== record.id);
-        }
-        const mapped = mapMessageRow(record);
-        if (mapped.id && prev.some((m) => m.id === mapped.id)) return prev;
-        return [...prev, mapped];
-      });
-    });
-
-    roomChannelRef.current = subscribeToRoom(room.id, ({ record }) => {
-      setCurrentNumber(record.current_number);
-      setCurrentPlayerIndex(record.current_player_index);
-      setGameOver(record.status === 'finished');
-      setDifficulty(record.difficulty);
-      setShowHints(record.show_hints);
-    });
-
-    presenceChannelRef.current = createPresenceChannel(room.id, myId, playerName, {
-      onSync: () => {
-        // No-op: rely on leave events to prune disconnected clients.
-      },
-      onLeave: (playersLeaving) => {
-        playersLeaving.forEach(({ playerId, name }) => {
-          void removePlayer(playerId);
-          void sendMessage({
-            type: 'system',
-            text: `${name ?? 'Un giocatore'} ha lasciato la partita.`,
-            playerId,
-            timestamp: Date.now()
-          });
-        });
-      }
-    });
-  }, [sendMessage]);
 
   const startOnlineSession = async (playerName: string) => {
     if (!supabase) {

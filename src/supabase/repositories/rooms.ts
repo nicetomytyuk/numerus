@@ -31,6 +31,13 @@ export const getRoomByCode = async (code: string): Promise<RoomRow | null> => {
   return data as RoomRow;
 };
 
+export const getRoomById = async (roomId: string): Promise<RoomRow | null> => {
+  if (!supabase) return null;
+  const { data, error } = await supabase.from('rooms').select('*').eq('id', roomId).single();
+  if (error) throw error;
+  return data as RoomRow;
+};
+
 export const updateRoomState = async (
   roomId: string,
   payload: Partial<Pick<RoomRow, 'current_number' | 'current_player_index' | 'status'>>
