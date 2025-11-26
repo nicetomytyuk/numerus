@@ -11,7 +11,8 @@ import { addPlayer, listPlayers, updatePlayerPoints, removePlayer } from './supa
 import { addMessage as addRemoteMessage, listMessages, clearMessages } from './supabase/repositories/messages';
 import { subscribeToPlayers, subscribeToMessages, subscribeToRoom } from './supabase/subscriptions';
 import type { PlayerRow, MessageRow, RoomRow } from './supabase/types';
-import { supabase, supabaseRestUrl, supabaseKey } from './supabase/client';
+import { supabase } from './supabase/client';
+import { createPresenceChannel } from './supabase/presence';
 import HomeScreen from './components/HomeScreen';
 import JoinScreen from './components/JoinScreen';
 import UsernameScreen from './components/UsernameScreen';
@@ -94,6 +95,7 @@ const App = () => {
   const playerChannelRef = useRef<ReturnType<typeof subscribeToPlayers> | null>(null);
   const messageChannelRef = useRef<ReturnType<typeof subscribeToMessages> | null>(null);
   const roomChannelRef = useRef<ReturnType<typeof subscribeToRoom> | null>(null);
+  const presenceChannelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -119,31 +121,6 @@ const App = () => {
   }, [difficulty, messages.length]);
 
   // Remove myself on tab close/navigation for online games
-  useEffect(() => {
-    if (gameMode !== 'online' || !myPlayerId) return;
-    const handleLeave = () => {
-      // try fast fetch with keepalive
-      if (supabaseRestUrl && supabaseKey) {
-        void fetch(`${supabaseRestUrl}/room_players?id=eq.${myPlayerId}`, {
-          method: 'DELETE',
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`
-          },
-          keepalive: true
-        });
-      } else {
-        void removePlayer(myPlayerId);
-      }
-    };
-    window.addEventListener('beforeunload', handleLeave);
-    window.addEventListener('pagehide', handleLeave);
-    return () => {
-      window.removeEventListener('beforeunload', handleLeave);
-      window.removeEventListener('pagehide', handleLeave);
-    };
-  }, [gameMode, myPlayerId]);
-
   const persistRoom = (code: string, playerList: Player[], level: Difficulty) => {
     persistRoomSnapshot(code, playerList, level, setStoredRoom);
   };
@@ -179,9 +156,11 @@ const App = () => {
     playerChannelRef.current?.unsubscribe?.();
     messageChannelRef.current?.unsubscribe?.();
     roomChannelRef.current?.unsubscribe?.();
+    presenceChannelRef.current?.unsubscribe?.();
     playerChannelRef.current = null;
     messageChannelRef.current = null;
     roomChannelRef.current = null;
+    presenceChannelRef.current = null;
     setPlayers([]);
     setMessages([]);
     setCurrentNumber(1);
@@ -275,10 +254,11 @@ const App = () => {
     setMessages(remoteMessages.map(mapMessageRow));
   };
 
-  const attachRealtime = (room: RoomRow, myId: string) => {
+  const attachRealtime = (room: RoomRow, myId: string, playerName: string) => {
     playerChannelRef.current?.unsubscribe?.();
     messageChannelRef.current?.unsubscribe?.();
     roomChannelRef.current?.unsubscribe?.();
+    presenceChannelRef.current?.unsubscribe?.();
 
     playerChannelRef.current = subscribeToPlayers(room.id, ({ type, record }) => {
       setPlayers((prev) => {
@@ -315,6 +295,17 @@ const App = () => {
       setDifficulty(record.difficulty);
       setShowHints(record.show_hints);
     });
+
+    presenceChannelRef.current = createPresenceChannel(room.id, myId, playerName, {
+      onSync: () => {
+        // No-op: rely on leave events to prune disconnected clients.
+      },
+      onLeave: (playerIds) => {
+        playerIds.forEach((id) => {
+          void removePlayer(id);
+        });
+      }
+    });
   };
 
   const startOnlineSession = async (playerName: string) => {
@@ -339,7 +330,7 @@ const App = () => {
         setMyPlayerId(myRemote.id);
         setUsername(playerName);
         await hydrateFromRoom(newRoom, myRemote.id);
-        attachRealtime(newRoom, myRemote.id);
+        attachRealtime(newRoom, myRemote.id, playerName);
         await sendMessage({
           type: 'system',
           text: `${playerName} ha creato la partita.`,
@@ -364,7 +355,7 @@ const App = () => {
         setMyPlayerId(myRemote.id);
         setUsername(playerName);
         await hydrateFromRoom(existingRoom, myRemote.id);
-        attachRealtime(existingRoom, myRemote.id);
+        attachRealtime(existingRoom, myRemote.id, playerName);
         await sendMessage({
           type: 'system',
           text: `${playerName} è entrato nella partita.`,

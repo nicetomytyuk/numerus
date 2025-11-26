@@ -1,20 +1,36 @@
-import { supabase } from './client';
-import type { MessageRow, PlayerRow, RoomRow } from './types';
+import { supabase } from "./client";
+import type { MessageRow, PlayerRow, RoomRow } from "./types";
 
 export const subscribeToPlayers = (
   roomId: string,
-  handler: (payload: { type: 'INSERT' | 'UPDATE' | 'DELETE'; record: PlayerRow }) => void
+  handler: (payload: {
+    type: "INSERT" | "UPDATE" | "DELETE";
+    record: PlayerRow;
+  }) => void
 ) => {
   if (!supabase) return null;
   const channel = supabase
     .channel(`room-players-${roomId}`)
     .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'room_players', filter: `room_id=eq.${roomId}` },
+      "postgres_changes",
+      // Do not filter by room_id at the subscription level because DELETE payloads
+      // may omit the column; filter in the handler instead.
+      { event: "*", schema: "public", table: "room_players" },
       (payload) => {
-        const record = (payload.new || payload.old) as PlayerRow | null;
+        const record = (
+          payload.new && Object.keys(payload.new).length > 0
+            ? payload.new
+            : payload.old
+        ) as PlayerRow | null;
         if (!record) return;
-        handler({ type: payload.eventType as 'INSERT' | 'UPDATE' | 'DELETE', record });
+        const targetRoomId =
+          (payload.new as PlayerRow | null)?.room_id ??
+          (payload.old as PlayerRow | null)?.room_id;
+        if (targetRoomId && targetRoomId !== roomId) return;
+        handler({
+          type: payload.eventType as "INSERT" | "UPDATE" | "DELETE",
+          record,
+        });
       }
     )
     .subscribe();
@@ -23,18 +39,27 @@ export const subscribeToPlayers = (
 
 export const subscribeToMessages = (
   roomId: string,
-  handler: (payload: { type: 'INSERT' | 'DELETE'; record: MessageRow }) => void
+  handler: (payload: { type: "INSERT" | "DELETE"; record: MessageRow }) => void
 ) => {
   if (!supabase) return null;
   const channel = supabase
     .channel(`room-messages-${roomId}`)
     .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'room_messages', filter: `room_id=eq.${roomId}` },
+      "postgres_changes",
+      // Same rationale: filter manually to ensure DELETE events without room_id still arrive.
+      { event: "*", schema: "public", table: "room_messages" },
       (payload) => {
-        const record = (payload.new || payload.old) as MessageRow | null;
+        const record = (
+          payload.new && Object.keys(payload.new).length > 0
+            ? payload.new
+            : payload.old
+        ) as MessageRow | null;
         if (!record) return;
-        handler({ type: payload.eventType as 'INSERT' | 'DELETE', record });
+        const targetRoomId =
+          (payload.new as MessageRow | null)?.room_id ??
+          (payload.old as MessageRow | null)?.room_id;
+        if (targetRoomId && targetRoomId !== roomId) return;
+        handler({ type: payload.eventType as "INSERT" | "DELETE", record });
       }
     )
     .subscribe();
@@ -43,18 +68,23 @@ export const subscribeToMessages = (
 
 export const subscribeToRoom = (
   roomId: string,
-  handler: (payload: { type: 'UPDATE'; record: RoomRow }) => void
+  handler: (payload: { type: "UPDATE"; record: RoomRow }) => void
 ) => {
   if (!supabase) return null;
   const channel = supabase
     .channel(`room-${roomId}`)
     .on(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` },
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "rooms",
+        filter: `id=eq.${roomId}`,
+      },
       (payload) => {
         const record = payload.new as RoomRow | null;
         if (!record) return;
-        handler({ type: 'UPDATE', record });
+        handler({ type: "UPDATE", record });
       }
     )
     .subscribe();
