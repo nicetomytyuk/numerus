@@ -5,7 +5,7 @@ type PresenceMeta = { playerId: string; name: string; roomId: string };
 
 type PresenceHandlers = {
   onSync: (presentIds: Set<string>) => void;
-  onLeave: (playerIds: string[]) => void;
+  onLeave: (players: { playerId: string; name?: string }[]) => void;
 };
 
 export const createPresenceChannel = (
@@ -32,12 +32,15 @@ export const createPresenceChannel = (
   });
 
   channel.on("presence", { event: "leave" }, ({ leftPresences }) => {
-    const leavingIds =
+    const leaving =
       (leftPresences ?? [])
-        .map((meta) => (meta as PresenceMeta | { playerId?: string }).playerId)
-        .filter((id): id is string => Boolean(id)) ?? [];
-    if (leavingIds.length > 0) {
-      handlers.onLeave(leavingIds);
+        .map((meta) => {
+          const cast = meta as PresenceMeta | { playerId?: string; name?: string };
+          return { playerId: cast.playerId, name: cast.name };
+        })
+        .filter((meta) => Boolean(meta.playerId)) as { playerId: string; name?: string }[];
+    if (leaving.length > 0) {
+      handlers.onLeave(leaving);
     }
   });
 

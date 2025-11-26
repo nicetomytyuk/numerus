@@ -300,9 +300,15 @@ const App = () => {
       onSync: () => {
         // No-op: rely on leave events to prune disconnected clients.
       },
-      onLeave: (playerIds) => {
-        playerIds.forEach((id) => {
-          void removePlayer(id);
+      onLeave: (playersLeaving) => {
+        playersLeaving.forEach(({ playerId, name }) => {
+          void removePlayer(playerId);
+          void sendMessage({
+            type: 'system',
+            text: `${name ?? 'Un giocatore'} ha lasciato la partita.`,
+            playerId,
+            timestamp: Date.now()
+          });
         });
       }
     });
@@ -703,11 +709,11 @@ const App = () => {
 
         <ChatFeed
           messages={messages}
-        gameOver={gameOver}
-        difficulty={difficulty}
-        now={now}
-        players={players}
-        endRef={messagesEndRef}
+          gameOver={gameOver}
+          difficulty={difficulty}
+          now={now}
+          players={players}
+          endRef={messagesEndRef}
         />
 
         <div className="bottom-panel">
@@ -728,23 +734,23 @@ const App = () => {
           )}
 
           {!gameOver && (
-          <Keyboard
-            keys={romanKeys}
-            disabled={
-              !activePlayer?.isMe
-              || (gameMode === 'online' && players.length < 2)
-            }
-            activePlayerName={activePlayer?.name}
-            overlayLabel={
-              gameMode === 'online' && players.length < 2
-                ? 'In attesa di altri giocatori...'
-                : activePlayer?.name
-                  ? `È il turno di ${activePlayer.name}`
-                  : 'In attesa di altri giocatori...'
-            }
-            onKeyPress={(key) => handleRomanInput(key as (typeof romanKeys)[number])}
-          />
-        )}
+            <Keyboard
+              keys={romanKeys}
+              disabled={
+                !activePlayer?.isMe
+                || (gameMode === 'online' && players.length < 2)
+              }
+              activePlayerName={activePlayer?.name}
+              overlayLabel={
+                gameMode === 'online' && players.length < 2
+                  ? 'In attesa di altri giocatori...'
+                  : activePlayer?.name
+                    ? `È il turno di ${activePlayer.name}`
+                    : 'In attesa di altri giocatori...'
+              }
+              onKeyPress={(key) => handleRomanInput(key as (typeof romanKeys)[number])}
+            />
+          )}
         </div>
       </div>
     </div>
