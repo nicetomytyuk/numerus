@@ -12,19 +12,25 @@ type Props = {
   playerNames?: Record<string, string>;
 };
 
-const ChatFeed = ({ messages, gameOver, difficulty, now, endRef, players, playerNames }: Props) => (
-  <section className={`chat ${gameOver ? 'chat-danger' : ''}`}>
-    {messages.map((msg) => {
-      const isVanishing =
-        difficulty === 'hard' && now - msg.timestamp >= HARD_MESSAGE_LIFETIME - HARD_VANISH_DURATION;
-      const playerName = msg.player
-        || (msg.playerId ? players.find((p) => p.id === msg.playerId)?.name : undefined)
-        || (msg.playerId ? playerNames?.[msg.playerId] : undefined)
-        || '';
-      return (
-        <div key={(msg.id ?? msg.timestamp) + msg.text} className={`chat-row ${isVanishing ? 'vanishing' : ''}`}>
-          {msg.type === 'system' && <div className="chat-system">{msg.text}</div>}
-          {msg.type === 'play' && (
+const ChatFeed = ({ messages, gameOver, difficulty, now, endRef, players, playerNames }: Props) => {
+  const visibleMessages =
+    difficulty === 'hard'
+      ? messages.filter((msg) => now - msg.timestamp < HARD_MESSAGE_LIFETIME)
+      : messages;
+
+  return (
+    <section className={`chat ${gameOver ? 'chat-danger' : ''}`}>
+      {visibleMessages.map((msg) => {
+        const isVanishing =
+          difficulty === 'hard' && now - msg.timestamp >= HARD_MESSAGE_LIFETIME - HARD_VANISH_DURATION;
+        const playerName = msg.player
+          || (msg.playerId ? players.find((p) => p.id === msg.playerId)?.name : undefined)
+          || (msg.playerId ? playerNames?.[msg.playerId] : undefined)
+          || '';
+        return (
+          <div key={(msg.id ?? msg.timestamp) + msg.text} className={`chat-row ${isVanishing ? 'vanishing' : ''}`}>
+            {msg.type === 'system' && <div className="chat-system">{msg.text}</div>}
+            {msg.type === 'play' && (
             <div className="chat-play">
               <span className="chat-player">{playerName}</span>
               <span className="chat-letter">{msg.text}</span>
@@ -41,8 +47,9 @@ const ChatFeed = ({ messages, gameOver, difficulty, now, endRef, players, player
         </div>
       );
     })}
-    <div ref={endRef} />
-  </section>
-);
+      <div ref={endRef} />
+    </section>
+  );
+};
 
 export default ChatFeed;

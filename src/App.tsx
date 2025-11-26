@@ -3,7 +3,7 @@ import { useMatch, useNavigate } from 'react-router-dom';
 import './App.css';
 
 import type { Difficulty, Mode, Player, Screen, StoredRoom, Message, GameMode } from './types';
-import { romanKeys, HARD_MESSAGE_LIFETIME } from './constants';
+import { romanKeys } from './constants';
 import { convertToRoman } from './utils/roman';
 import { randomRoomCode } from './utils/random';
 import {
@@ -308,19 +308,6 @@ const App = () => {
       }
     });
   }, [sendMessage, startTurnTimer, currentNumber, currentPlayerIndex, players, roomId]);
-
-  useEffect(() => {
-    if (difficulty !== 'hard') return;
-
-    const purgeExpired = () => {
-      const cutoff = Date.now() - HARD_MESSAGE_LIFETIME;
-      setMessages((prev) => prev.filter((msg) => msg.timestamp >= cutoff));
-    };
-
-    purgeExpired();
-    const interval = window.setInterval(purgeExpired, 750);
-    return () => window.clearInterval(interval);
-  }, [difficulty]);
 
   useEffect(() => {
     if (difficulty !== 'hard' || messages.length === 0) return;
