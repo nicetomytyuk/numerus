@@ -9,15 +9,17 @@ type Props = {
   now: number;
   endRef: RefObject<HTMLDivElement | null>;
   players: Player[];
+  playerNames?: Record<string, string>;
 };
 
-const ChatFeed = ({ messages, gameOver, difficulty, now, endRef, players }: Props) => (
+const ChatFeed = ({ messages, gameOver, difficulty, now, endRef, players, playerNames }: Props) => (
   <section className={`chat ${gameOver ? 'chat-danger' : ''}`}>
     {messages.map((msg) => {
       const isVanishing =
         difficulty === 'hard' && now - msg.timestamp >= HARD_MESSAGE_LIFETIME - HARD_VANISH_DURATION;
       const playerName = msg.player
         || (msg.playerId ? players.find((p) => p.id === msg.playerId)?.name : undefined)
+        || (msg.playerId ? playerNames?.[msg.playerId] : undefined)
         || '';
       return (
         <div key={(msg.id ?? msg.timestamp) + msg.text} className={`chat-row ${isVanishing ? 'vanishing' : ''}`}>

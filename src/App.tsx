@@ -91,6 +91,7 @@ const App = () => {
   const [usernameInput, setUsernameInput] = useState('');
   const [username, setUsername] = useState('');
   const [players, setPlayers] = useState<Player[]>([]);
+  const [playerNames, setPlayerNames] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentNumber, setCurrentNumber] = useState(1);
   const [currentRoman, setCurrentRoman] = useState('');
@@ -169,7 +170,12 @@ const App = () => {
     });
 
     roomChannelRef.current = subscribeToRoom(room.id, ({ record }) => {
-      setCurrentNumber(record.current_number);
+      setCurrentNumber((prev) => {
+        if (prev !== record.current_number) {
+          setCurrentRoman('');
+        }
+        return record.current_number;
+      });
       setCurrentPlayerIndex(record.current_player_index);
       setGameOver(record.status === 'finished');
       setDifficulty(record.difficulty);
@@ -209,6 +215,18 @@ const App = () => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    setPlayerNames((prev) => {
+      const next = { ...prev };
+      players.forEach((p) => {
+        if (p.id && !next[p.id]) {
+          next[p.id] = p.name;
+        }
+      });
+      return next;
+    });
+  }, [players]);
 
   useEffect(() => {
     if (difficulty !== 'hard') return;
@@ -838,6 +856,7 @@ const App = () => {
           difficulty={difficulty}
           now={now}
           players={players}
+          playerNames={playerNames}
           endRef={messagesEndRef}
         />
 
