@@ -109,6 +109,11 @@ const App = () => {
   const [onlineSession, setOnlineSession] = useState<StoredOnlineSession | null>(() => readOnlineSession());
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const turnDeadlineRef = useRef<number | null>(null);
+  const currentNumberRef = useRef(currentNumber);
+  const currentPlayerIndexRef = useRef(currentPlayerIndex);
+  const playersRef = useRef<Player[]>(players);
+  const gameModeRef = useRef<GameMode>(gameMode);
+  const gameOverRef = useRef(gameOver);
   const playerChannelRef = useRef<ReturnType<typeof subscribeToPlayers> | null>(null);
   const messageChannelRef = useRef<ReturnType<typeof subscribeToMessages> | null>(null);
   const roomChannelRef = useRef<ReturnType<typeof subscribeToRoom> | null>(null);
@@ -121,25 +126,42 @@ const App = () => {
     writeOnlineSession(session);
   };
 
-  const startTurnTimer = useCallback(
-    (humanCountOverride?: number) => {
-      const humans = humanCountOverride ?? players.filter((p) => !p.isBot).length;
-      if (gameOver) {
-        turnDeadlineRef.current = null;
-        setTurnDeadline(null);
-        return;
-      }
-      if (gameMode === 'online' && humans < 2) {
-        turnDeadlineRef.current = null;
-        setTurnDeadline(null);
-        return;
-      }
-      const deadline = Date.now() + 10000;
-      turnDeadlineRef.current = deadline;
-      setTurnDeadline(deadline);
-    },
-    [gameMode, players, gameOver]
-  );
+  const startTurnTimer = useCallback((humanCountOverride?: number) => {
+    const humans = humanCountOverride ?? playersRef.current.filter((p) => !p.isBot).length;
+    if (gameOverRef.current) {
+      turnDeadlineRef.current = null;
+      setTurnDeadline(null);
+      return;
+    }
+    if (gameModeRef.current === 'online' && humans < 2) {
+      turnDeadlineRef.current = null;
+      setTurnDeadline(null);
+      return;
+    }
+    const deadline = Date.now() + 10000;
+    turnDeadlineRef.current = deadline;
+    setTurnDeadline(deadline);
+  }, []);
+
+  useEffect(() => {
+    currentNumberRef.current = currentNumber;
+  }, [currentNumber]);
+
+  useEffect(() => {
+    currentPlayerIndexRef.current = currentPlayerIndex;
+  }, [currentPlayerIndex]);
+
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
+
+  useEffect(() => {
+    gameModeRef.current = gameMode;
+  }, [gameMode]);
+
+  useEffect(() => {
+    gameOverRef.current = gameOver;
+  }, [gameOver]);
 
   const hydrateFromRoom = useCallback(async (room: RoomRow, myId: string) => {
     const [remotePlayers, remoteMessages] = await Promise.all([
@@ -233,8 +255,11 @@ const App = () => {
         const nextMessages = [...prev, mapped];
 
         if (mapped.type === 'play') {
-          const effectiveNumber = mapped.number ?? currentNumber;
-          if (mapped.number && mapped.number > currentNumber) {
+          const currentNumberValue = currentNumberRef.current;
+          const playersValue = playersRef.current;
+          const currentPlayerIndexValue = currentPlayerIndexRef.current;
+          const effectiveNumber = mapped.number ?? currentNumberValue;
+          if (mapped.number && mapped.number > currentNumberValue) {
             setCurrentNumber(mapped.number);
           }
           const assembled = nextMessages
@@ -243,10 +268,10 @@ const App = () => {
             .join('');
           setCurrentRoman(assembled);
 
-          const iAmOwner = players.some((p) => p.isMe && p.isOwner);
+          const iAmOwner = playersValue.some((p) => p.isMe && p.isOwner);
           const target = convertToRoman(effectiveNumber);
           if (iAmOwner && assembled === target) {
-            const nextIdx = nextIndex(currentPlayerIndex, players);
+            const nextIdx = nextIndex(currentPlayerIndexValue, playersValue);
             const nextNumber = effectiveNumber + 1;
             setCurrentNumber(nextNumber);
             setCurrentRoman('');
@@ -307,7 +332,7 @@ const App = () => {
         });
       }
     });
-  }, [sendMessage, startTurnTimer, currentNumber, currentPlayerIndex, players, roomId]);
+  }, [sendMessage, startTurnTimer, roomId]);
 
   useEffect(() => {
     if (difficulty !== 'hard' || messages.length === 0) return;
