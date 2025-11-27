@@ -10,11 +10,19 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
-  --bg-gradient: radial-gradient(
-      circle at 20% 20%,
-      rgba(255, 110, 153, 0.18),
-      transparent 30%
+  --bg-gradient:     /* Fade to solid color at top */ linear-gradient(
+      180deg,
+      var(--bg) 0%,
+      transparent 15%,
+      transparent 85%,
+      var(--bg) 100%
     ),
+    /* Original radial gradients */
+      radial-gradient(
+        circle at 20% 20%,
+        rgba(255, 110, 153, 0.18),
+        transparent 30%
+      ),
     radial-gradient(
       circle at 80% 10%,
       rgba(155, 123, 255, 0.25),
@@ -36,7 +44,7 @@ body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: var(--bg-gradient);
+  background: var(--bg);
 }
 
 .app-shell {
